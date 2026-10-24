@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { disruptions, stations } from '../src/data/railway.ts'
-import { planJourney } from '../src/engine/planJourney.ts'
+import { planJourney, planJourneyDetailed } from '../src/engine/planJourney.ts'
 import type { JourneyRequest, Service } from '../src/types/journey.ts'
 
 const request = (origin: string, destination: string, time = '07:00'): JourneyRequest => ({
@@ -10,7 +10,7 @@ const request = (origin: string, destination: string, time = '07:00'): JourneyRe
   date: '2030-01-07',
   time,
   passengers: 1,
-  priorities: { reliability: 55, comfort: 25, speed: 20 },
+  rankingConfiguration: { weights: { arrivalTimeRisk: 55, connectionRisk: 55, fare: 25, confirmationUncertainty: 20, accessibilityPreference: 0 } },
 })
 
 test('finds a scheduled direct route and calculates duration', () => {
@@ -33,6 +33,30 @@ test('finds a connecting route with station-matched legs and sufficient buffer',
   assert.equal(result[0].bufferMinutes[0], 35)
   assert.equal(result[0].durationMinutes, 180)
   assert.equal(result[0].legs[0].to.id, result[0].legs[1].from.id)
+})
+
+test('journey search uses the shared decision engine and recalculates scores when weights change', () => {
+  const arrivalRiskOnly = { weights: { arrivalTimeRisk: 100, connectionRisk: 0, fare: 0, confirmationUncertainty: 0, accessibilityPreference: 0 } }
+  const fareOnly = { weights: { arrivalTimeRisk: 0, connectionRisk: 0, fare: 100, confirmationUncertainty: 0, accessibilityPreference: 0 } }
+  const arrivalPlan = planJourneyDetailed({ ...request('NDLS', 'JP', '06:00'), rankingConfiguration: arrivalRiskOnly })
+  const farePlan = planJourneyDetailed({ ...request('NDLS', 'JP', '06:00'), rankingConfiguration: fareOnly })
+  assert.equal(arrivalPlan.options[0].transferCount, 0)
+  assert.equal(farePlan.options[0].transferCount, 0)
+  const arrivalScore = arrivalPlan.decisions.find((decision) => decision.itineraryId === 's3')?.score
+  const fareScore = farePlan.decisions.find((decision) => decision.itineraryId === 's3')?.score
+  assert.notEqual(arrivalScore, fareScore)
+  assert.ok(arrivalPlan.options[0].reasons.some((reason) => reason.includes('Ranked 1')))
+  assert.ok(arrivalPlan.decisions.every((decision) => decision.score !== null || decision.rejectionReasons.length > 0))
+})
+
+test('mandatory accessibility features filter synthetic options before recommendations', () => {
+  const result = planJourneyDetailed({
+    ...request('NDLS', 'JP', '06:00'),
+    passengerProfiles: [{ id: 'p-access', category: 'accessible', mandatoryAccessibilityFeatures: ['step-free-boarding'] }],
+  })
+  assert.ok(result.options.length > 0)
+  assert.ok(result.options.every((option) => option.legs.every((leg) => leg.service.syntheticAccessibilityFeatures?.includes('step-free-boarding'))))
+  assert.ok(result.decisions.some((decision) => decision.rejectionReasons.some((reason) => reason.code === 'MANDATORY_ACCESSIBILITY_UNAVAILABLE')))
 })
 
 test('every distinct station pair in the dropdown network has a feasible route', () => {

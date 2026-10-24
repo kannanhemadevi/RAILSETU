@@ -36,7 +36,9 @@ npm run preview
 
 ## Ranking overview
 
-The client-side planner finds direct paths and paths with up to two transfers through the local fixtures. It filters out departures before the requested time and connections under 25 minutes. It then calculates a score from reliability (synthetic disruption flags and connection margins), comfort (transfers and long waits), and speed (elapsed journey time), weighted by the controls in Risk-aware Route Lab. Estimated fares are illustrative values, not prices. A result's explanation is generated from the same synthetic values.
+The client-side planner finds direct paths and paths with up to two transfers through the local fixtures. Hard passenger, accessibility, schedule, and transfer constraints are evaluated before scoring; a rejected itinerary never becomes recommendable because of a low fare or score. The five configurable demo weights default to arrival-time risk 30%, connection risk 30%, fare 20%, confirmation uncertainty 10%, and optional accessibility preference satisfaction 10%. These illustrative defaults are not validated optimal weights.
+
+Each factor is normalized to a 0–100 desirability score, then the weighted mean is calculated as `sum(normalized factor × weight) / sum(weights)`. Lower risk and uncertainty are inverted so lower risk scores higher; synthetic fare is min–max normalized within the feasible candidate set so the lower fare scores higher; equal fares score 100. Missing or invalid factor values receive a neutral 50. Only optional accessibility preferences are scored; mandatory accessibility and caregiver requirements remain hard constraints. Routes are ordered by score descending, then lower connection risk, fewer transfers, shorter journey, lower synthetic fare, and stable itinerary ID. No randomness or current-time tie-break is used. Every schedule, fare, feature, and risk value remains synthetic demo data.
 
 ## Checks
 

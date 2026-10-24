@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createBaselineSimulation, hasValidAlternative, inject55MinuteDelay, recommendedAlternatives, resetSimulation } from '../src/engine/disruptionSimulator.ts'
+import { createBaselineSimulation, hasValidAlternative, inject55MinuteDelay, recommendedAlternatives, resetSimulation, updateSimulationRankingConfiguration } from '../src/engine/disruptionSimulator.ts'
 import { rankItineraries } from '../src/engine/decisionEngine.ts'
 import type { PassengerProfile } from '../src/types/decision.ts'
 
@@ -47,6 +47,18 @@ test('the same event sequence is reproducible and duplicate clicks are idempoten
   assert.deepEqual(first.currentRankings, second.currentRankings)
   assert.deepEqual(first.history, second.history)
   assert.strictEqual(inject55MinuteDelay(first), first)
+})
+
+test('preference changes rerank the simulator, delay filters feasibility, and reset restores the configured baseline', () => {
+  const arrivalRiskConfiguration = { weights: { arrivalTimeRisk: 100, connectionRisk: 0, fare: 0, confirmationUncertainty: 0, accessibilityPreference: 0 } }
+  const initial = createBaselineSimulation(passengers)
+  const baseline = updateSimulationRankingConfiguration(initial, arrivalRiskConfiguration)
+  assert.equal(baseline.currentRankings[0].itineraryId, 'synthetic-connection')
+  const injected = inject55MinuteDelay(baseline)
+  assert.deepEqual(recommendedAlternatives(injected).map((item) => item.itineraryId), ['synthetic-direct-alternative'])
+  const reset = resetSimulation(injected)
+  assert.equal(reset.currentRankings[0].itineraryId, 'synthetic-connection')
+  assert.deepEqual(reset.currentRankings, reset.baselineRankings)
 })
 
 test('reports when the injected delay leaves no feasible alternative', () => {

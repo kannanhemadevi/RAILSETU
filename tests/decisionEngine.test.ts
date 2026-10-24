@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { evaluateItinerary, rankItineraries } from '../src/engine/decisionEngine.ts'
-import type { DisruptionEvent, Itinerary, RefundRecord, TrainLeg } from '../src/types/decision.ts'
+import type { DisruptionEvent, Itinerary, RankingConfiguration, RefundRecord, TrainLeg } from '../src/types/decision.ts'
 
 const leg = (overrides: Partial<TrainLeg> = {}): TrainLeg => ({
   id: 'leg-1', serviceId: 'synthetic-service-1', fromStationId: 'NDLS', toStationId: 'AGC',
@@ -17,6 +17,15 @@ const connectingItinerary = (options: { category?: 'adult' | 'senior' | 'child' 
     caregiverConstraints: options.caregiverMinimum ? [{ caregiverPassengerId: 'p1', dependentPassengerIds: ['p2'], minimumTransferMinutes: options.caregiverMinimum }] : [],
   }
 }
+
+const scoredDirect = (id: string, scoringFactors: NonNullable<Itinerary['scoringFactors']>, passengerOverrides: Partial<Itinerary['passengers'][number]> = {}): Itinerary => ({
+  id,
+  legs: [leg({ id: `${id}-leg`, toStationId: 'JP', scheduledArrivalAt: '2030-01-07T11:00:00.000Z' })],
+  passengers: [{ id: 'p1', category: 'adult', ...passengerOverrides }],
+  scoringFactors,
+})
+
+const arrivalFocused: RankingConfiguration = { weights: { arrivalTimeRisk: 100, connectionRisk: 0, fare: 0, confirmationUncertainty: 0, accessibilityPreference: 0 } }
 
 test('confirmed tickets do not make an infeasible transfer feasible', () => {
   const decision = evaluateItinerary(connectingItinerary({ category: 'accessible', connectionMinutes: 40, delayMinutes: 55 }))
@@ -79,7 +88,7 @@ test('a mismatched transfer station is a hard constraint failure', () => {
   itinerary.legs[1].fromStationId = 'LKO'
   const decision = evaluateItinerary(itinerary)
   assert.equal(decision.status, 'infeasible')
-  assert.ok(decision.explanations.some((item) => item.code === 'STATION_MISMATCH'))
+  assert.ok(decision.rejectionReasons.some((item) => item.code === 'STATION_MISMATCH'))
 })
 
 test('malformed transfer timestamps return an infeasible decision instead of crashing', () => {
@@ -87,14 +96,71 @@ test('malformed transfer timestamps return an infeasible decision instead of cra
   itinerary.legs[1].scheduledDepartureAt = 'not-a-timestamp'
   const decision = evaluateItinerary(itinerary)
   assert.equal(decision.status, 'infeasible')
-  assert.ok(decision.explanations.some((item) => item.code === 'INVALID_LEG_TIME'))
+  assert.ok(decision.rejectionReasons.some((item) => item.code === 'INVALID_LEG_TIME'))
   assert.ok(decision.explanations.some((item) => item.code === 'TRANSFER_INFEASIBLE'))
 })
 
 test('invalid configurable weights are rejected explicitly', () => {
   const itinerary = connectingItinerary()
-  assert.throws(() => evaluateItinerary(itinerary, { reliability: 0, duration: 0, fewerTransfers: 0, transferSlack: 0 }), /weights must be finite/i)
-  assert.throws(() => evaluateItinerary(itinerary, { reliability: Number.NaN, duration: 1, fewerTransfers: 0, transferSlack: 0 }), /weights must be finite/i)
+  assert.throws(() => evaluateItinerary(itinerary, { weights: { arrivalTimeRisk: 0, connectionRisk: 0, fare: 0, confirmationUncertainty: 0, accessibilityPreference: 0 } }), /weights must be finite/i)
+  assert.throws(() => evaluateItinerary(itinerary, { weights: { arrivalTimeRisk: Number.NaN, connectionRisk: 1, fare: 0, confirmationUncertainty: 0, accessibilityPreference: 0 } }), /weights must be finite/i)
+})
+
+test('mandatory accessibility rejects a low-fare itinerary before scoring', () => {
+  const lowFare = scoredDirect('low-fare-missing-access', {
+    arrivalTimeRisk: 0, connectionRisk: 0, farePaise: 1, confirmationUncertainty: 0, accessibilityPreferenceSatisfaction: 100, synthetic: true,
+  }, { mandatoryAccessibilityFeatures: ['step-free-boarding'] })
+  const decision = evaluateItinerary(lowFare)
+  assert.equal(decision.accepted, false)
+  assert.equal(decision.score, null)
+  assert.equal(decision.scoreExplanations.length, 0)
+  assert.ok(decision.rejectionReasons.some((reason) => reason.code === 'MANDATORY_ACCESSIBILITY_UNAVAILABLE'))
+})
+
+test('infeasible transfers are rejected before an otherwise perfect weighted score', () => {
+  const impossible = connectingItinerary({ connectionMinutes: 20 })
+  impossible.scoringFactors = { arrivalTimeRisk: 0, connectionRisk: 0, farePaise: 0, confirmationUncertainty: 0, accessibilityPreferenceSatisfaction: 100, synthetic: true }
+  const safe = scoredDirect('safe-direct', { arrivalTimeRisk: 80, connectionRisk: 20, farePaise: 90000, confirmationUncertainty: 40, accessibilityPreferenceSatisfaction: 20, synthetic: true })
+  const decisions = rankItineraries([impossible, safe], arrivalFocused)
+  assert.equal(decisions[0].itineraryId, 'safe-direct')
+  const rejected = decisions.find((item) => item.itineraryId === impossible.id)!
+  assert.equal(rejected.accepted, false)
+  assert.equal(rejected.score, null)
+  assert.ok(rejected.rejectionReasons.some((reason) => reason.code === 'INFEASIBLE_TRANSFER'))
+})
+
+test('valid preference weight changes can change the winner', () => {
+  const lowRiskExpensive = scoredDirect('risk-priority', { arrivalTimeRisk: 0, connectionRisk: 0, farePaise: 100000, confirmationUncertainty: 100, accessibilityPreferenceSatisfaction: 0, synthetic: true })
+  const balancedCheap = scoredDirect('balanced-priority', { arrivalTimeRisk: 25, connectionRisk: 25, farePaise: 10000, confirmationUncertainty: 0, accessibilityPreferenceSatisfaction: 100, synthetic: true })
+  const balanced = rankItineraries([lowRiskExpensive, balancedCheap])
+  const arrivalOnly = rankItineraries([lowRiskExpensive, balancedCheap], arrivalFocused)
+  assert.equal(balanced[0].itineraryId, 'balanced-priority')
+  assert.equal(arrivalOnly[0].itineraryId, 'risk-priority')
+})
+
+test('tie-breaking uses documented connection-risk order and remains stable across input order', () => {
+  const lowConnectionRisk = scoredDirect('z-low-risk', { arrivalTimeRisk: 10, connectionRisk: 5, farePaise: 50000, confirmationUncertainty: 50, accessibilityPreferenceSatisfaction: 50, synthetic: true })
+  const highConnectionRisk = scoredDirect('a-high-risk', { arrivalTimeRisk: 10, connectionRisk: 80, farePaise: 50000, confirmationUncertainty: 50, accessibilityPreferenceSatisfaction: 50, synthetic: true })
+  assert.deepEqual(rankItineraries([highConnectionRisk, lowConnectionRisk], arrivalFocused).map((item) => item.itineraryId), ['z-low-risk', 'a-high-risk'])
+  const tiedA = scoredDirect('alpha', { arrivalTimeRisk: 10, connectionRisk: 5, farePaise: 50000, confirmationUncertainty: 50, accessibilityPreferenceSatisfaction: 50, synthetic: true })
+  const tiedB = scoredDirect('beta', { arrivalTimeRisk: 10, connectionRisk: 5, farePaise: 50000, confirmationUncertainty: 50, accessibilityPreferenceSatisfaction: 50, synthetic: true })
+  assert.deepEqual(rankItineraries([tiedB, tiedA], arrivalFocused).map((item) => item.itineraryId), ['alpha', 'beta'])
+  assert.deepEqual(rankItineraries([tiedA, tiedB], arrivalFocused).map((item) => item.itineraryId), ['alpha', 'beta'])
+})
+
+test('score and rejection explanations are separate and accurately sum weighted factors', () => {
+  const itinerary = scoredDirect('explained-route', { arrivalTimeRisk: 10, connectionRisk: 20, farePaise: 50000, confirmationUncertainty: 30, accessibilityPreferenceSatisfaction: 80, synthetic: true })
+  const decision = rankItineraries([itinerary])[0]
+  assert.equal(decision.accepted, true)
+  assert.deepEqual(decision.rejectionReasons, [])
+  assert.equal(decision.score, Math.round(decision.scoreExplanations.reduce((sum, factor) => sum + factor.weightedContribution, 0) * 100) / 100)
+  assert.ok(decision.scoreExplanations.some((factor) => factor.factor === 'fare' && factor.explanation.includes('candidate-set fare')))
+  assert.match(decision.rankingExplanation, /Ranked 1/)
+
+  const rejected = evaluateItinerary(connectingItinerary({ connectionMinutes: 10 }))
+  assert.ok(rejected.rejectionReasons.length > 0)
+  assert.deepEqual(rejected.scoreExplanations, [])
+  assert.match(rejected.rankingExplanation, /^Rejected:/)
 })
 
 test('cancellation is a hard constraint even when tickets are confirmed', () => {
@@ -102,7 +168,7 @@ test('cancellation is a hard constraint even when tickets are confirmed', () => 
   itinerary.disruptionEvents = [{ id: 'cancel-1', kind: 'cancellation', affectedLegId: 'leg-1', severity: 'high', description: 'Synthetic cancellation', synthetic: true }]
   const decision = evaluateItinerary(itinerary)
   assert.equal(decision.status, 'infeasible')
-  assert.ok(decision.explanations.some((item) => item.code === 'LEG_CANCELLED'))
+  assert.ok(decision.rejectionReasons.some((item) => item.code === 'LEG_CANCELLED'))
 })
 
 test('a synthetic closure of a leg station is a hard constraint', () => {
@@ -110,7 +176,7 @@ test('a synthetic closure of a leg station is a hard constraint', () => {
   itinerary.disruptionEvents = [{ id: 'closure-1', kind: 'station_closure', affectedStationId: 'AGC', severity: 'high', description: 'Synthetic station closure', synthetic: true }]
   const decision = evaluateItinerary(itinerary)
   assert.equal(decision.status, 'infeasible')
-  assert.ok(decision.explanations.some((item) => item.code === 'STATION_CLOSED'))
+  assert.ok(decision.rejectionReasons.some((item) => item.code === 'STATION_CLOSED'))
 })
 
 test('ranking is deterministic and puts feasible itineraries ahead of infeasible ones', () => {

@@ -1,5 +1,7 @@
+import { DEFAULT_RANKING_CONFIGURATION, rankItineraries } from './decisionEngine.ts'
 import { disruptions as demoDisruptions, services as demoServices, stations as demoStations } from '../data/railway.ts'
-import type { JourneyLeg, JourneyOption, JourneyRequest, Service } from '../types/journey'
+import type { Itinerary, PassengerProfile, RankingConfiguration } from '../types/decision.ts'
+import type { JourneyLeg, JourneyOption, JourneyPlanResult, JourneyRequest, Service } from '../types/journey.ts'
 
 const atLocalTime = (date: Date, value: string) => {
   const [hour, minute] = value.split(':').map(Number)
@@ -9,40 +11,63 @@ const atLocalTime = (date: Date, value: string) => {
 }
 
 function nextServiceTime(service: Service, earliest: Date): { departAt: Date; arriveAt: Date } | null {
-  const duration = (() => {
-    const departMinutes = Number(service.depart.slice(0, 2)) * 60 + Number(service.depart.slice(3))
-    const arriveMinutes = Number(service.arrive.slice(0, 2)) * 60 + Number(service.arrive.slice(3))
-    return (arriveMinutes <= departMinutes ? arriveMinutes + 1440 : arriveMinutes) - departMinutes
-  })()
+  const departMinutes = Number(service.depart.slice(0, 2)) * 60 + Number(service.depart.slice(3))
+  const arriveMinutes = Number(service.arrive.slice(0, 2)) * 60 + Number(service.arrive.slice(3))
+  const duration = (arriveMinutes <= departMinutes ? arriveMinutes + 1440 : arriveMinutes) - departMinutes
   for (let offset = 0; offset <= 7; offset += 1) {
     const day = new Date(earliest)
     day.setDate(day.getDate() + offset)
     if (!service.days.includes(day.getDay())) continue
     const departAt = atLocalTime(day, service.depart)
     if (departAt < earliest) continue
-    const arriveAt = new Date(departAt.getTime() + duration * 60000)
-    return { departAt, arriveAt }
+    return { departAt, arriveAt: new Date(departAt.getTime() + duration * 60000) }
   }
   return null
 }
 
-export function planJourney(
+function createProfiles(request: JourneyRequest): PassengerProfile[] {
+  if (request.passengerProfiles?.length) return request.passengerProfiles
+  return Array.from({ length: Math.max(1, request.passengers) }, (_, index) => ({ id: `synthetic-passenger-${index + 1}`, category: 'adult' as const }))
+}
+
+function toItinerary(option: JourneyOption, profiles: PassengerProfile[], disruptions: typeof demoDisruptions): Itinerary {
+  const legs = option.legs.map((leg, index) => ({
+    id: `${option.id}-leg-${index + 1}`,
+    serviceId: leg.service.id,
+    fromStationId: leg.from.id,
+    toStationId: leg.to.id,
+    scheduledDepartureAt: leg.departAt.toISOString(),
+    scheduledArrivalAt: leg.arriveAt.toISOString(),
+    ticketStatus: 'unbooked' as const,
+  }))
+  const availableFeatures = option.legs.map((leg) => leg.service.syntheticAccessibilityFeatures ?? [])
+  const accessibilityFeatures = availableFeatures.length ? availableFeatures[0].filter((feature) => availableFeatures.every((features) => features.includes(feature))) : []
+  const arrivalTimeRisk = Math.min(100, option.legs.reduce((sum, leg) => sum + (disruptions.find((event) => event.serviceId === leg.service.id && event.level === 'caution') ? 30 : 0), 0))
+  return {
+    id: option.id,
+    legs,
+    passengers: profiles,
+    accessibilityFeatures,
+    scoringFactors: { arrivalTimeRisk, farePaise: option.fare * 100, confirmationUncertainty: 100, synthetic: true },
+  }
+}
+
+export function planJourneyDetailed(
   request: JourneyRequest,
   services = demoServices,
   stations = demoStations,
   disruptions = demoDisruptions,
-): JourneyOption[] {
-  const options: JourneyOption[] = []
+  rankingConfiguration: RankingConfiguration = request.rankingConfiguration ?? DEFAULT_RANKING_CONFIGURATION,
+): JourneyPlanResult {
+  const candidates: JourneyOption[] = []
   const start = atLocalTime(new Date(`${request.date}T12:00:00`), request.time)
   const stationIds = new Set(stations.map((station) => station.id))
-  if (!stationIds.has(request.origin) || !stationIds.has(request.destination) || request.origin === request.destination || Number.isNaN(start.getTime())) return options
-  const minimumTransferMinutes = 25
-  const maximumTransferMinutes = 240
+  if (!stationIds.has(request.origin) || !stationIds.has(request.destination) || request.origin === request.destination || Number.isNaN(start.getTime())) return { options: [], decisions: [] }
   const addOption = (path: Service[]) => {
     if (path.length === 0 || path.length > 3) return
     const legs: JourneyLeg[] = []
     path.forEach((service, index) => {
-      const earliest = index === 0 ? start : new Date(legs[index - 1].arriveAt.getTime() + minimumTransferMinutes * 60000)
+      const earliest = index === 0 ? start : legs[index - 1].arriveAt
       const times = nextServiceTime(service, earliest)
       const from = stations.find((station) => station.id === service.from)
       const to = stations.find((station) => station.id === service.to)
@@ -50,16 +75,15 @@ export function planJourney(
       legs.push({ service, from, to, ...times })
     })
     if (legs.length !== path.length) return
-    const buffers = legs.slice(1).map((leg, i) => Math.round((leg.departAt.getTime() - legs[i].arriveAt.getTime()) / 60000))
-    if (buffers.some((buffer) => buffer < minimumTransferMinutes || buffer > maximumTransferMinutes)) return
-    const durationMinutes = Math.round((legs[legs.length - 1].arriveAt.getTime() - legs[0].departAt.getTime()) / 60000)
-    const risk = Math.min(100, legs.reduce((total, leg) => total + (disruptions.find((d) => d.serviceId === leg.service.id)?.level === 'caution' ? 30 : 0) + (disruptions.find((d) => d.stationId === leg.to.id)?.level === 'watch' ? 12 : 0), 0) + buffers.reduce((t, buffer) => t + (buffer < 40 ? 15 : 0), 0))
-    const reliability = 100 - risk
-    const comfort = Math.max(15, 100 - path.length * 16 - buffers.filter((b) => b > 180).length * 14)
-    const speed = Math.max(10, 100 - durationMinutes / 7)
-    const { reliability: rw, comfort: cw, speed: sw } = request.priorities
-    const score = Math.round((reliability * rw + comfort * cw + speed * sw) / Math.max(1, rw + cw + sw))
-    options.push({ id: path.map((s) => s.id).join('-'), legs, departure: legs[0].departAt, arrival: legs.at(-1)!.arriveAt, durationMinutes, transferCount: path.length - 1, bufferMinutes: buffers, risk, score, fare: Math.round(520 + durationMinutes * 2.7 + (path.length - 1) * 115), reasons: [risk < 20 ? 'Lower simulated disruption exposure' : 'Review synthetic disruption note', path.length === 1 ? 'No transfers required' : `${path.length - 1} planned connection${path.length > 2 ? 's' : ''}`, `${durationMinutes < 300 ? 'Shorter journey time' : 'Connection margin included'}`] })
+    const buffers = legs.slice(1).map((leg, index) => Math.round((leg.departAt.getTime() - legs[index].arriveAt.getTime()) / 60000))
+    const durationMinutes = Math.round((legs.at(-1)!.arriveAt.getTime() - legs[0].departAt.getTime()) / 60000)
+    const cautionRisk = Math.min(100, path.reduce((sum, service) => sum + (disruptions.some((event) => event.serviceId === service.id && event.level === 'caution') ? 30 : 0), 0))
+    const fare = Math.round(520 + durationMinutes * 2.7 + (path.length - 1) * 115)
+    candidates.push({
+      id: path.map((service) => service.id).join('-'), legs, departure: legs[0].departAt, arrival: legs.at(-1)!.arriveAt,
+      durationMinutes, transferCount: path.length - 1, bufferMinutes: buffers, risk: cautionRisk, score: 0, fare,
+      reasons: [],
+    })
   }
   const walk = (stationId: string, path: Service[], visited: Set<string>) => {
     if (path.length >= 3) return
@@ -70,5 +94,24 @@ export function planJourney(
     }
   }
   walk(request.origin, [], new Set([request.origin]))
-  return options.sort((a, b) => b.score - a.score || a.durationMinutes - b.durationMinutes).slice(0, 8)
+
+  const profiles = createProfiles(request)
+  const itineraries = candidates.map((candidate) => toItinerary(candidate, profiles, disruptions))
+  const decisions = rankItineraries(itineraries, rankingConfiguration)
+  const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]))
+  const options = decisions.filter((decision) => decision.accepted).slice(0, 8).map((decision) => {
+    const candidate = candidateById.get(decision.itineraryId)!
+    const arrivalRisk = decision.scoreExplanations.find((factor) => factor.factor === 'arrivalTimeRisk')?.inputValue ?? 50
+    const connectionRisk = decision.scoreExplanations.find((factor) => factor.factor === 'connectionRisk')?.inputValue ?? 50
+    const reasons = [
+      ...decision.scoreExplanations.map((factor) => `${factor.factor}: ${factor.normalizedScore.toFixed(1)}/100 (weight ${factor.weight}; contribution ${factor.weightedContribution.toFixed(2)}). ${factor.explanation}`),
+      decision.rankingExplanation,
+    ]
+    return { ...candidate, score: decision.score ?? 0, risk: Math.min(100, Math.round(arrivalRisk + connectionRisk)), reasons }
+  })
+  return { options, decisions }
+}
+
+export function planJourney(request: JourneyRequest, services = demoServices, stations = demoStations, disruptions = demoDisruptions): JourneyOption[] {
+  return planJourneyDetailed(request, services, stations, disruptions).options
 }

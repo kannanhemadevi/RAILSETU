@@ -16,18 +16,24 @@ function trainLeg(serviceId: string, id: string, day: string) {
     toStationId: timetable.to,
     scheduledDepartureAt: `${day}T${timetable.depart}:00.000Z`,
     scheduledArrivalAt: `${day}T${timetable.arrive}:00.000Z`,
-    ticketStatus: 'confirmed' as const,
+    ticketStatus: 'unbooked' as const,
   }
 }
 
 export function createDisruptionDemoItineraries(passengers: PassengerProfile[]): Itinerary[] {
   const demoDay = '2030-01-07'
+  const accessibleFeatures = (serviceIds: string[]) => {
+    const features = serviceIds.map((id) => service(id).syntheticAccessibilityFeatures ?? [])
+    return features.length ? features[0].filter((feature) => features.every((set) => set.includes(feature))) : []
+  }
   return [
     {
       id: 'synthetic-connection',
       legs: [trainLeg('s1', 'sim-feeder', demoDay), trainLeg('s2', 'sim-connection', demoDay)],
       passengers,
       caregiverConstraints: [{ caregiverPassengerId: passengers[0]?.id ?? 'demo-caregiver', dependentPassengerIds: passengers.slice(1).map((passenger) => passenger.id), minimumTransferMinutes: 30 }],
+      accessibilityFeatures: accessibleFeatures(['s1', 's2']),
+      scoringFactors: { arrivalTimeRisk: 0, farePaise: 160700, confirmationUncertainty: 100, synthetic: true },
       disruptionEvents: [],
       refundRecords: [],
     },
@@ -35,6 +41,8 @@ export function createDisruptionDemoItineraries(passengers: PassengerProfile[]):
       id: 'synthetic-direct-alternative',
       legs: [trainLeg('s3', 'sim-direct', demoDay)],
       passengers,
+      accessibilityFeatures: accessibleFeatures(['s3']),
+      scoringFactors: { arrivalTimeRisk: 30, farePaise: 134400, confirmationUncertainty: 100, synthetic: true },
       disruptionEvents: [],
       refundRecords: [],
     },

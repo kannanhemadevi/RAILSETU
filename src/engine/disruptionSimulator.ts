@@ -1,6 +1,6 @@
-import { rankItineraries } from './decisionEngine.ts'
+import { DEFAULT_RANKING_CONFIGURATION, rankItineraries } from './decisionEngine.ts'
 import { createDisruptionDemoItineraries, syntheticRefundLedger } from '../data/disruptionScenario.ts'
-import type { DisruptionEvent, Itinerary, ItineraryDecision, PassengerProfile, RefundRecord } from '../types/decision.ts'
+import type { DisruptionEvent, Itinerary, ItineraryDecision, PassengerProfile, RankingConfiguration, RefundRecord } from '../types/decision.ts'
 
 export type SimulationPhase = 'baseline' | 'delay-injected'
 export type SimulationAction = 'inject-55-minute-delay' | 'reset-to-baseline'
@@ -9,6 +9,7 @@ export type ItineraryChange = { itineraryId: string; beforeStatus: string; after
 
 export type DisruptionSimulationState = {
   phase: SimulationPhase
+  rankingConfiguration: RankingConfiguration
   passengers: PassengerProfile[]
   refundRecords: RefundRecord[]
   baselineItineraries: Itinerary[]
@@ -31,8 +32,8 @@ export function syncSimulationPassengers(state: DisruptionSimulationState, passe
     ...itinerary,
     disruptionEvents: itinerary.id === 'synthetic-connection' ? state.activeEvents : [],
   }))
-  const baselineRankings = rankItineraries(baselineItineraries)
-  return { ...state, passengers, baselineItineraries, currentItineraries, baselineRankings, currentRankings: rankItineraries(currentItineraries) }
+  const baselineRankings = rankItineraries(baselineItineraries, state.rankingConfiguration)
+  return { ...state, passengers, baselineItineraries, currentItineraries, baselineRankings, currentRankings: rankItineraries(currentItineraries, state.rankingConfiguration) }
 }
 
 function rankOf(rankings: ItineraryDecision[], itineraryId: string): number | null {
@@ -53,13 +54,20 @@ function compareRankings(before: ItineraryDecision[], after: ItineraryDecision[]
   })
 }
 
-export function createBaselineSimulation(passengers: PassengerProfile[], refundRecords = syntheticRefundLedger): DisruptionSimulationState {
+export function createBaselineSimulation(passengers: PassengerProfile[], refundRecords = syntheticRefundLedger, rankingConfiguration: RankingConfiguration = DEFAULT_RANKING_CONFIGURATION): DisruptionSimulationState {
   const baselineItineraries = createDisruptionDemoItineraries(passengers)
-  const baselineRankings = rankItineraries(baselineItineraries)
-  return { phase: 'baseline', passengers, refundRecords, baselineItineraries, currentItineraries: baselineItineraries, baselineRankings, currentRankings: baselineRankings, activeEvents: [], history: [], changes: [] }
+  const baselineRankings = rankItineraries(baselineItineraries, rankingConfiguration)
+  return { phase: 'baseline', rankingConfiguration, passengers, refundRecords, baselineItineraries, currentItineraries: baselineItineraries, baselineRankings, currentRankings: baselineRankings, activeEvents: [], history: [], changes: [] }
 }
 
-export function inject55MinuteDelay(state: DisruptionSimulationState, currentPassengers = state.passengers): DisruptionSimulationState {
+export function updateSimulationRankingConfiguration(state: DisruptionSimulationState, rankingConfiguration: RankingConfiguration): DisruptionSimulationState {
+  if (JSON.stringify(state.rankingConfiguration) === JSON.stringify(rankingConfiguration)) return state
+  const baselineRankings = rankItineraries(state.baselineItineraries, rankingConfiguration)
+  const currentRankings = rankItineraries(state.currentItineraries, rankingConfiguration)
+  return { ...state, rankingConfiguration, baselineRankings, currentRankings, changes: compareRankings(state.currentRankings, currentRankings) }
+}
+
+export function inject55MinuteDelay(state: DisruptionSimulationState, currentPassengers = state.passengers, rankingConfiguration = state.rankingConfiguration): DisruptionSimulationState {
   if (state.phase === 'delay-injected') return state
   const event: DisruptionEvent = {
     id: 'synthetic-delay-55', kind: 'delay', affectedLegId: 'sim-feeder', delayMinutes: 55, severity: 'high',
@@ -69,10 +77,12 @@ export function inject55MinuteDelay(state: DisruptionSimulationState, currentPas
     ...itinerary,
     disruptionEvents: itinerary.id === 'synthetic-connection' ? [event] : [],
   }))
-  const currentRankings = rankItineraries(currentItineraries)
+  const currentRankings = rankItineraries(currentItineraries, rankingConfiguration)
   return {
     ...state,
     phase: 'delay-injected',
+    rankingConfiguration,
+    baselineRankings: rankItineraries(state.baselineItineraries, rankingConfiguration),
     passengers: currentPassengers,
     currentItineraries,
     currentRankings,
@@ -82,13 +92,15 @@ export function inject55MinuteDelay(state: DisruptionSimulationState, currentPas
   }
 }
 
-export function resetSimulation(state: DisruptionSimulationState, currentPassengers = state.passengers): DisruptionSimulationState {
+export function resetSimulation(state: DisruptionSimulationState, currentPassengers = state.passengers, rankingConfiguration = state.rankingConfiguration): DisruptionSimulationState {
   if (state.phase === 'baseline') return state
   const currentItineraries = withPassengers(state.baselineItineraries, currentPassengers)
-  const currentRankings = rankItineraries(currentItineraries)
+  const currentRankings = rankItineraries(currentItineraries, rankingConfiguration)
   return {
     ...state,
     phase: 'baseline',
+    rankingConfiguration,
+    baselineRankings: rankItineraries(state.baselineItineraries, rankingConfiguration),
     passengers: currentPassengers,
     currentItineraries,
     currentRankings,

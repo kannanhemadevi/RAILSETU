@@ -12,7 +12,7 @@ export const stations: Station[] = [
 ]
 
 const daily = [0, 1, 2, 3, 4, 5, 6]
-export const services: Service[] = [
+const baseServices: Service[] = [
   { id: 's1', number: 'RS 2041', from: 'NDLS', to: 'AGC', depart: '06:10', arrive: '08:25', days: daily, classLabel: 'Intercity' },
   { id: 's2', number: 'RS 3180', from: 'AGC', to: 'JP', depart: '09:05', arrive: '12:10', days: daily, classLabel: 'Express' },
   { id: 's3', number: 'RS 2048', from: 'NDLS', to: 'JP', depart: '07:15', arrive: '12:20', days: daily, classLabel: 'Direct express' },
@@ -39,6 +39,16 @@ export const services: Service[] = [
   { id: 's21', number: 'RS 5496', from: 'NDLS', to: 'LKO', depart: '11:00', arrive: '15:15', days: daily, classLabel: 'Express' },
   { id: 's22', number: 'RS 6504', from: 'NDLS', to: 'CNB', depart: '11:15', arrive: '15:30', days: daily, classLabel: 'Intercity' },
 ]
+
+// Synthetic-only capability examples; these are not verified station or train accommodations.
+const demoAccessibility: Record<string, string[]> = {
+  s1: ['priority-seating'], s2: ['priority-seating'], s3: ['step-free-boarding', 'priority-seating'],
+  s4: ['priority-seating'], s5: ['step-free-boarding'], s6: ['priority-seating'], s7: [], s8: ['step-free-boarding'],
+  s9: ['priority-seating'], s10: [], s11: ['priority-seating'], s12: ['step-free-boarding'], s13: ['priority-seating'],
+  s14: ['step-free-boarding'], s15: ['priority-seating'], s16: [], s17: ['step-free-boarding'], s18: ['priority-seating'],
+  s19: ['step-free-boarding', 'priority-seating'], s20: ['priority-seating'], s21: ['step-free-boarding'], s22: [],
+}
+export const services: Service[] = baseServices.map((service) => ({ ...service, syntheticAccessibilityFeatures: demoAccessibility[service.id] ?? [] }))
 
 export const disruptions: Disruption[] = [
   { id: 'd1', serviceId: 's3', level: 'caution', title: 'Tight schedule margin', detail: 'This demo service has a simulated 15 minute delay risk.' },
