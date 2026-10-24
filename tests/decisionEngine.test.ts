@@ -22,8 +22,29 @@ test('confirmed tickets do not make an infeasible transfer feasible', () => {
   const decision = evaluateItinerary(connectingItinerary({ category: 'accessible', connectionMinutes: 40, delayMinutes: 55 }))
   assert.equal(decision.status, 'infeasible')
   assert.equal(decision.score, null)
+  assert.equal(decision.transferFeasibility[0].remainingConnectionMinutes, -15)
   assert.equal(decision.transferFeasibility[0].slackMinutes, -55)
   assert.ok(decision.explanations.some((item) => item.code === 'TICKET_STATUS_NOT_FEASIBILITY'))
+})
+
+test('55-minute delay leaves -15 minutes and misses a 30-minute group minimum by 45 minutes', () => {
+  const decision = evaluateItinerary(connectingItinerary({ connectionMinutes: 40, delayMinutes: 55, caregiverMinimum: 30 }))
+  const transfer = decision.transferFeasibility[0]
+  assert.equal(transfer.remainingConnectionMinutes, -15)
+  assert.equal(transfer.requiredMinutes, 30)
+  assert.equal(transfer.slackMinutes, -45)
+  assert.equal(transfer.status, 'infeasible')
+  assert.match(transfer.explanation, /remaining connection time is -15 minutes/i)
+  assert.match(transfer.explanation, /misses .* minimum of 30 minutes by 45 minutes/i)
+})
+
+test('negative remaining time stays infeasible when minimum is only 15 minutes', () => {
+  const itinerary = connectingItinerary({ connectionMinutes: 40, delayMinutes: 55, caregiverMinimum: 15 })
+  itinerary.passengers = []
+  const decision = evaluateItinerary(itinerary)
+  assert.equal(decision.transferFeasibility[0].requiredMinutes, 15)
+  assert.equal(decision.transferFeasibility[0].remainingConnectionMinutes, -15)
+  assert.equal(decision.transferFeasibility[0].status, 'infeasible')
 })
 
 test('a 40-minute connection meets an accessible passenger minimum at the boundary', () => {
@@ -31,6 +52,20 @@ test('a 40-minute connection meets an accessible passenger minimum at the bounda
   assert.equal(decision.transferFeasibility[0].requiredMinutes, 40)
   assert.equal(decision.transferFeasibility[0].slackMinutes, 0)
   assert.equal(decision.status, 'risky')
+})
+
+test('remaining time exactly equal to the required minimum is not infeasible', () => {
+  const decision = evaluateItinerary(connectingItinerary({ category: 'accessible', connectionMinutes: 40 }))
+  assert.equal(decision.transferFeasibility[0].remainingConnectionMinutes, 40)
+  assert.equal(decision.transferFeasibility[0].slackMinutes, 0)
+  assert.notEqual(decision.transferFeasibility[0].status, 'infeasible')
+})
+
+test('remaining time one minute below the required minimum is infeasible', () => {
+  const decision = evaluateItinerary(connectingItinerary({ connectionMinutes: 29, caregiverMinimum: 30 }))
+  assert.equal(decision.transferFeasibility[0].remainingConnectionMinutes, 29)
+  assert.equal(decision.transferFeasibility[0].slackMinutes, -1)
+  assert.equal(decision.transferFeasibility[0].status, 'infeasible')
 })
 
 test('caregiver constraints raise the minimum transfer time for the group', () => {

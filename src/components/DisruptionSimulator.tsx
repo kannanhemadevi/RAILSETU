@@ -1,12 +1,12 @@
 import { useState } from 'react'
-import { createBaselineSimulation, hasValidAlternative, inject55MinuteDelay, resetSimulation, syncSimulationPassengers } from '../engine/disruptionSimulator.ts'
+import { createBaselineSimulation, hasValidAlternative, inject55MinuteDelay, recommendedAlternatives, resetSimulation, syncSimulationPassengers } from '../engine/disruptionSimulator.ts'
 import type { PassengerProfile } from '../types/decision.ts'
 
 export function DisruptionSimulator({ passengers }: { passengers: PassengerProfile[] }) {
   const [simulationState, setSimulation] = useState(() => createBaselineSimulation(passengers))
   const simulation = syncSimulationPassengers(simulationState, passengers)
 
-  const rankedAlternatives = simulation.currentRankings.filter((decision) => decision.status !== 'infeasible')
+  const rankedAlternatives = recommendedAlternatives(simulation)
 
   return <section className="simulator" aria-labelledby="simulator-title">
     <div className="simulator-heading"><div><span className="section-index">SYNTHETIC SCENARIO</span><h3 id="simulator-title">Disruption Simulator</h3><p>See how a delay changes connection feasibility and alternative rankings.</p></div><span className="sim-status">{simulation.phase === 'baseline' ? 'BASELINE' : '55 MIN DELAY INJECTED'}</span></div>

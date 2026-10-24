@@ -14,7 +14,7 @@ export const stations: Station[] = [
 const daily = [0, 1, 2, 3, 4, 5, 6]
 export const services: Service[] = [
   { id: 's1', number: 'RS 2041', from: 'NDLS', to: 'AGC', depart: '06:10', arrive: '08:25', days: daily, classLabel: 'Intercity' },
-  { id: 's2', number: 'RS 3180', from: 'AGC', to: 'JP', depart: '09:00', arrive: '12:10', days: daily, classLabel: 'Express' },
+  { id: 's2', number: 'RS 3180', from: 'AGC', to: 'JP', depart: '09:05', arrive: '12:10', days: daily, classLabel: 'Express' },
   { id: 's3', number: 'RS 2048', from: 'NDLS', to: 'JP', depart: '07:15', arrive: '12:20', days: daily, classLabel: 'Direct express' },
   { id: 's4', number: 'RS 4422', from: 'NDLS', to: 'BPL', depart: '08:00', arrive: '16:05', days: daily, classLabel: 'Intercity' },
   { id: 's5', number: 'RS 7710', from: 'BPL', to: 'MMCT', depart: '17:10', arrive: '23:35', days: daily, classLabel: 'Overnight express' },

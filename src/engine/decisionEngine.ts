@@ -54,7 +54,7 @@ export function evaluateItinerary(itinerary: Itinerary, weights: DecisionWeights
   const explanations = hardConstraintExplanations(itinerary)
   const transferFeasibility = assessTransfers(itinerary)
   for (const transfer of transferFeasibility) {
-    explanations.push({ code: `TRANSFER_${transfer.status.toUpperCase()}`, status: transfer.status, message: transfer.explanation, details: { fromLegId: transfer.fromLegId, toLegId: transfer.toLegId, slackMinutes: transfer.slackMinutes, requiredMinutes: transfer.requiredMinutes } })
+    explanations.push({ code: `TRANSFER_${transfer.status.toUpperCase()}`, status: transfer.status, message: transfer.explanation, details: { fromLegId: transfer.fromLegId, toLegId: transfer.toLegId, remainingConnectionMinutes: transfer.remainingConnectionMinutes, slackMinutes: transfer.slackMinutes, requiredMinutes: transfer.requiredMinutes } })
   }
   const infeasible = explanations.some((explanation) => explanation.status === 'infeasible')
   const status: TransferStatus = infeasible ? 'infeasible' : transferFeasibility.some((transfer) => transfer.status === 'risky') ? 'risky' : 'feasible'

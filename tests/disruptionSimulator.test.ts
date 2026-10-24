@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createBaselineSimulation, hasValidAlternative, inject55MinuteDelay, resetSimulation } from '../src/engine/disruptionSimulator.ts'
+import { createBaselineSimulation, hasValidAlternative, inject55MinuteDelay, recommendedAlternatives, resetSimulation } from '../src/engine/disruptionSimulator.ts'
 import { rankItineraries } from '../src/engine/decisionEngine.ts'
 import type { PassengerProfile } from '../src/types/decision.ts'
 
@@ -15,9 +15,13 @@ test('injecting a 55-minute delay invalidates the tight transfer and reranks the
   assert.equal(baseline.currentRankings.find((item) => item.itineraryId === 'synthetic-connection')?.status, 'risky')
   assert.equal(connection?.status, 'infeasible')
   assert.equal(connection?.score, null)
+  assert.equal(connection?.transferFeasibility[0].remainingConnectionMinutes, -15)
+  assert.equal(connection?.transferFeasibility[0].slackMinutes, -45)
+  assert.match(connection?.transferFeasibility[0].explanation ?? '', /misses .* minimum of 30 minutes by 45 minutes/i)
   assert.equal(alternative?.status, 'feasible')
   assert.ok(alternative?.score !== null && alternative?.score !== undefined)
   assert.equal(injected.currentRankings[0].itineraryId, 'synthetic-direct-alternative')
+  assert.deepEqual(recommendedAlternatives(injected).map((item) => item.itineraryId), ['synthetic-direct-alternative'])
   assert.ok(injected.changes.find((item) => item.itineraryId === 'synthetic-connection')?.beforeRank !== null)
   assert.equal(injected.changes.find((item) => item.itineraryId === 'synthetic-connection')?.afterRank, null)
   assert.equal(injected.activeEvents[0].delayMinutes, 55)
@@ -33,6 +37,7 @@ test('injection and reset preserve passenger profiles and unrelated refund ledge
   assert.strictEqual(reset.refundRecords, unrelatedLedger)
   assert.deepEqual(reset.activeEvents, [])
   assert.equal(reset.currentRankings.find((item) => item.itineraryId === 'synthetic-connection')?.status, 'risky')
+  assert.deepEqual(reset.currentRankings, reset.baselineRankings)
   assert.deepEqual(reset.history.map((item) => item.action), ['inject-55-minute-delay', 'reset-to-baseline'])
 })
 

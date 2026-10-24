@@ -28,14 +28,15 @@ export function assessTransfers(itinerary: Itinerary): TransferFeasibility[] {
     const delayMinutes = delayForLeg(itinerary, previousLeg.id)
     const actualArrival = new Date(scheduledArrival.getTime() + delayMinutes * 60000)
     const validTimes = Number.isFinite(scheduledArrival.getTime()) && Number.isFinite(scheduledDeparture.getTime())
-    const slackMinutes = validTimes ? Math.floor((scheduledDeparture.getTime() - actualArrival.getTime()) / 60000) - requiredMinutes : -Number.MAX_SAFE_INTEGER
+    const remainingConnectionMinutes = validTimes ? Math.floor((scheduledDeparture.getTime() - actualArrival.getTime()) / 60000) : -Number.MAX_SAFE_INTEGER
+    const slackMinutes = remainingConnectionMinutes - requiredMinutes
     const stationMismatch = previousLeg.toStationId !== nextLeg.fromStationId
     const status: TransferStatus = !validTimes || slackMinutes < 0 || stationMismatch ? 'infeasible' : slackMinutes < 15 ? 'risky' : 'feasible'
-    let explanation = `Transfer has ${slackMinutes} minutes beyond the required ${requiredMinutes}-minute minimum.`
+    let explanation = `Remaining connection time is ${remainingConnectionMinutes} minutes; ${slackMinutes} minutes beyond the required ${requiredMinutes}-minute minimum.`
     if (!validTimes) explanation = 'The transfer contains an invalid scheduled arrival or departure time.'
     else if (stationMismatch) explanation = 'The arriving leg and departing leg use different stations.'
-    else if (slackMinutes < 0) explanation = `Transfer misses the passenger/group minimum by ${Math.abs(slackMinutes)} minutes after disruption delay.`
-    else if (status === 'risky') explanation = `Transfer meets the minimum but has only ${slackMinutes} minutes of spare margin.`
+    else if (slackMinutes < 0) explanation = `Remaining connection time is ${remainingConnectionMinutes} minutes; the connection misses the passenger/group minimum of ${requiredMinutes} minutes by ${Math.abs(slackMinutes)} minutes after disruption delay.`
+    else if (status === 'risky') explanation = `Remaining connection time is ${remainingConnectionMinutes} minutes; the connection meets the minimum with only ${slackMinutes} minutes of spare margin.`
     return {
       fromLegId: previousLeg.id,
       toLegId: nextLeg.id,
@@ -44,6 +45,7 @@ export function assessTransfers(itinerary: Itinerary): TransferFeasibility[] {
       scheduledDepartureAt: nextLeg.scheduledDepartureAt,
       delayMinutes,
       actualArrivalAt: Number.isFinite(actualArrival.getTime()) ? actualArrival.toISOString() : 'Invalid synthetic time',
+      remainingConnectionMinutes,
       requiredMinutes,
       slackMinutes,
       status,

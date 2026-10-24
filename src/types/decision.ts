@@ -62,6 +62,7 @@ export type TransferFeasibility = {
   scheduledDepartureAt: string
   delayMinutes: number
   actualArrivalAt: string
+  remainingConnectionMinutes: number
   requiredMinutes: number
   slackMinutes: number
   status: TransferStatus

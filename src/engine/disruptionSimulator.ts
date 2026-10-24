@@ -99,5 +99,9 @@ export function resetSimulation(state: DisruptionSimulationState, currentPasseng
 }
 
 export function hasValidAlternative(state: DisruptionSimulationState): boolean {
-  return state.currentRankings.some((decision) => decision.status !== 'infeasible')
+  return recommendedAlternatives(state).length > 0
+}
+
+export function recommendedAlternatives(state: DisruptionSimulationState): ItineraryDecision[] {
+  return state.currentRankings.filter((decision) => decision.status !== 'infeasible')
 }

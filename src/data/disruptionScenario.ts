@@ -27,6 +27,7 @@ export function createDisruptionDemoItineraries(passengers: PassengerProfile[]):
       id: 'synthetic-connection',
       legs: [trainLeg('s1', 'sim-feeder', demoDay), trainLeg('s2', 'sim-connection', demoDay)],
       passengers,
+      caregiverConstraints: [{ caregiverPassengerId: passengers[0]?.id ?? 'demo-caregiver', dependentPassengerIds: passengers.slice(1).map((passenger) => passenger.id), minimumTransferMinutes: 30 }],
       disruptionEvents: [],
       refundRecords: [],
     },
