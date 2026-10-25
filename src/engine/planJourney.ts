@@ -30,7 +30,7 @@ function createProfiles(request: JourneyRequest): PassengerProfile[] {
   return Array.from({ length: Math.max(1, request.passengers) }, (_, index) => ({ id: `synthetic-passenger-${index + 1}`, category: 'adult' as const }))
 }
 
-function toItinerary(option: JourneyOption, profiles: PassengerProfile[], disruptions: typeof demoDisruptions): Itinerary {
+export function toDecisionItinerary(option: JourneyOption, profiles: PassengerProfile[], disruptions: typeof demoDisruptions = demoDisruptions): Itinerary {
   const legs = option.legs.map((leg, index) => ({
     id: `${option.id}-leg-${index + 1}`,
     serviceId: leg.service.id,
@@ -62,15 +62,19 @@ export function planJourneyDetailed(
   const candidates: JourneyOption[] = []
   const start = atLocalTime(new Date(`${request.date}T12:00:00`), request.time)
   const stationIds = new Set(stations.map((station) => station.id))
+  const stationById = new Map(stations.map((station) => [station.id, station]))
+  const servicesByOrigin = new Map<string, Service[]>()
+  for (const service of services) servicesByOrigin.set(service.from, [...(servicesByOrigin.get(service.from) ?? []), service])
   if (!stationIds.has(request.origin) || !stationIds.has(request.destination) || request.origin === request.destination || Number.isNaN(start.getTime())) return { options: [], decisions: [] }
+  const targetHubId = stationById.get(request.destination)?.networkHubId
   const addOption = (path: Service[]) => {
     if (path.length === 0 || path.length > 3) return
     const legs: JourneyLeg[] = []
     path.forEach((service, index) => {
       const earliest = index === 0 ? start : legs[index - 1].arriveAt
       const times = nextServiceTime(service, earliest)
-      const from = stations.find((station) => station.id === service.from)
-      const to = stations.find((station) => station.id === service.to)
+      const from = stationById.get(service.from)
+      const to = stationById.get(service.to)
       if (!times || !from || !to) return
       legs.push({ service, from, to, ...times })
     })
@@ -87,7 +91,15 @@ export function planJourneyDetailed(
   }
   const walk = (stationId: string, path: Service[], visited: Set<string>) => {
     if (path.length >= 3) return
-    for (const service of services.filter((candidate) => candidate.from === stationId && !visited.has(candidate.to))) {
+    const outgoing = servicesByOrigin.get(stationId) ?? []
+    const currentIsHub = stationById.get(stationId)?.networkHubId === stationId
+    const directToTargetHubExists = currentIsHub && Boolean(targetHubId && outgoing.some((service) => service.to === targetHubId))
+    for (const service of outgoing) {
+      if (visited.has(service.to)) continue
+      const nextIsHub = stationById.get(service.to)?.networkHubId === service.to
+      // Avoid needless hub-to-hub detours when the connected backbone provides a direct
+      // service to the destination's hub. This keeps route alternatives useful and search bounded.
+      if (currentIsHub && nextIsHub && directToTargetHubExists && service.to !== targetHubId) continue
       const nextPath = [...path, service]
       if (service.to === request.destination) addOption(nextPath)
       else walk(service.to, nextPath, new Set([...visited, service.to]))
@@ -96,7 +108,7 @@ export function planJourneyDetailed(
   walk(request.origin, [], new Set([request.origin]))
 
   const profiles = createProfiles(request)
-  const itineraries = candidates.map((candidate) => toItinerary(candidate, profiles, disruptions))
+  const itineraries = candidates.map((candidate) => toDecisionItinerary(candidate, profiles, disruptions))
   const decisions = rankItineraries(itineraries, rankingConfiguration)
   const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]))
   const options = decisions.filter((decision) => decision.accepted).slice(0, 8).map((decision) => {

@@ -1,1 +1,43 @@
-:root{font-family:'DM Sans',Arial,sans-serif;color:#294452;background:#f4f7f6;font-synthesis:none;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;font-optical-sizing:auto;font-weight:400}*{box-sizing:border-box}body{margin:0;min-width:320px;min-height:100vh}button,input,select{font:inherit}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #59a994;outline-offset:2px}::selection{background:#c9e8dd;color:#123448}
+:root {
+  font-family: Inter, "Noto Sans", "Noto Sans Devanagari", "Noto Sans Bengali", "Noto Sans Telugu", "Noto Sans Tamil", "Noto Nastaliq Urdu", "Segoe UI", Arial, sans-serif;
+  color: #172b4d;
+  background: #f3f6fa;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --navy: #102a43;
+  --brand-navy: #173f6f;
+  --blue: #2463a6;
+  --teal: #0f9d8a;
+  --teal-dark: #08796e;
+  --orange: #f59e0b;
+  --paper: #f3f6fa;
+  --surface: #fff;
+  --ink: #172b4d;
+  --muted: #526579;
+  --line: #d8e1eb;
+  --line-strong: #bdcbd9;
+  --success: #147247;
+  --warning: #82550a;
+  --danger: #a62e38;
+  --shadow-sm: 0 2px 8px rgb(16 42 67 / 6%);
+  --shadow-md: 0 8px 24px rgb(16 42 67 / 9%);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --content-width: 1440px;
+}
+
+* { box-sizing: border-box; }
+html { min-width: 320px; scroll-behavior: smooth; scroll-padding-top: 96px; }
+body { min-width: 320px; min-height: 100vh; margin: 0; background: var(--paper); font-size: 18px; line-height: 1.5; }
+button, input, select, textarea { color: inherit; font: inherit; }
+button, a, input, select, textarea, summary { -webkit-tap-highlight-color: transparent; }
+button { line-height: 1.25; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid #f0a921; outline-offset: 3px; }
+::selection { background: #cfe9e6; color: var(--navy); }
+#root { min-height: 100vh; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

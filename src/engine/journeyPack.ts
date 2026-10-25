@@ -4,7 +4,8 @@ import type { JourneyOption, Passenger } from '../types/journey.ts'
 export function buildJourneyPack(option: JourneyOption, passengers: Passenger[], decision?: ItineraryDecision): string {
   const legs = option.legs.map((leg, index) => {
     const transfer = index > 0 ? `\n  Transfer at ${option.legs[index - 1].to.name}: ${option.bufferMinutes[index - 1]} minutes` : ''
-    return `${index + 1}. ${leg.service.number} (${leg.service.classLabel})\n  ${leg.from.name} (${leg.from.code}) — ${leg.departAt.toLocaleString()} → ${leg.to.name} (${leg.to.code}) — ${leg.arriveAt.toLocaleString()}${transfer}`
+    const station = (value: typeof leg.from) => value.name + (value.code ? ' (' + value.code + ')' : ' · ' + value.city + ', ' + value.stateOrUT)
+    return `${index + 1}. ${leg.service.id} (${leg.service.classLabel})\n  ${station(leg.from)} — ${leg.departAt.toLocaleString()} → ${station(leg.to)} — ${leg.arriveAt.toLocaleString()}${transfer}`
   }).join('\n')
   const scoring = decision?.scoreExplanations.map((factor) => `- ${factor.factor}: input ${factor.inputValue ?? 'missing'}, normalized ${factor.normalizedScore}/100, weight ${factor.weight}, contribution ${factor.weightedContribution.toFixed(2)}. ${factor.explanation}`).join('\n') ?? option.reasons.map((reason) => `- ${reason}`).join('\n')
   const feasibility = decision?.explanations.map((explanation) => `- ${explanation.status}: ${explanation.message}`).join('\n') ?? 'Synthetic journey candidate accepted by planner.'

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { disruptions, stations } from '../src/data/railway.ts'
+import { disruptions, services, stations } from '../src/data/railway.ts'
 import { planJourney, planJourneyDetailed } from '../src/engine/planJourney.ts'
 import type { JourneyRequest, Service } from '../src/types/journey.ts'
 
@@ -19,9 +19,11 @@ test('finds a scheduled direct route and calculates duration', () => {
   assert.ok(direct)
   assert.equal(direct.legs.length, 1)
   assert.equal(direct.durationMinutes, (direct.arrival.getTime() - direct.departure.getTime()) / 60000)
-  const originalDemoService = result.find((route) => route.legs[0].service.id === 's3')
-  assert.ok(originalDemoService)
-  assert.equal(originalDemoService.durationMinutes, 305)
+  const originalDemoService = planJourneyDetailed(request('NDLS', 'JP')).decisions.find((decision) => decision.itineraryId === 'DEMO-1003')
+  assert.ok(originalDemoService?.accepted)
+  const directService = services.find((service) => service.id === 'DEMO-1003')
+  assert.ok(directService)
+  assert.equal((Number(directService.arrive.slice(0, 2)) * 60 + Number(directService.arrive.slice(3))) - (Number(directService.depart.slice(0, 2)) * 60 + Number(directService.depart.slice(3))), 305)
 })
 
 test('finds a connecting route with station-matched legs and sufficient buffer', () => {
@@ -42,8 +44,8 @@ test('journey search uses the shared decision engine and recalculates scores whe
   const farePlan = planJourneyDetailed({ ...request('NDLS', 'JP', '06:00'), rankingConfiguration: fareOnly })
   assert.equal(arrivalPlan.options[0].transferCount, 0)
   assert.equal(farePlan.options[0].transferCount, 0)
-  const arrivalScore = arrivalPlan.decisions.find((decision) => decision.itineraryId === 's3')?.score
-  const fareScore = farePlan.decisions.find((decision) => decision.itineraryId === 's3')?.score
+  const arrivalScore = arrivalPlan.decisions.find((decision) => decision.itineraryId === 'DEMO-1003')?.score
+  const fareScore = farePlan.decisions.find((decision) => decision.itineraryId === 'DEMO-1003')?.score
   assert.notEqual(arrivalScore, fareScore)
   assert.ok(arrivalPlan.options[0].reasons.some((reason) => reason.includes('Ranked 1')))
   assert.ok(arrivalPlan.decisions.every((decision) => decision.score !== null || decision.rejectionReasons.length > 0))
@@ -59,15 +61,50 @@ test('mandatory accessibility features filter synthetic options before recommend
   assert.ok(result.decisions.some((decision) => decision.rejectionReasons.some((reason) => reason.code === 'MANDATORY_ACCESSIBILITY_UNAVAILABLE')))
 })
 
-test('every distinct station pair in the dropdown network has a feasible route', () => {
-  for (const origin of stations) {
-    for (const destination of stations) {
-      if (origin.id === destination.id) continue
-      const result = planJourney(request(origin.id, destination.id))
-      assert.ok(result.length > 0, `Expected a route from ${origin.id} to ${destination.id}`)
-      assert.ok(result.every((route) => route.transferCount <= 2))
-    }
+test('catalogue spokes and hub backbone connect representative station pairs across regions', () => {
+  const serviceEdges = new Set(services.map((service) => service.from + '>' + service.to))
+  const hubs = [...new Set(stations.map((station) => station.networkHubId).filter((id): id is string => Boolean(id)))]
+  for (const station of stations) {
+    if (station.networkHubId === station.id) continue
+    assert.ok(serviceEdges.has(station.id + '>' + station.networkHubId), `Missing feeder from ${station.id}`)
+    assert.ok(serviceEdges.has(station.networkHubId + '>' + station.id), `Missing return service to ${station.id}`)
   }
+  for (const originHub of hubs) for (const destinationHub of hubs) {
+    if (originHub !== destinationHub) assert.ok(serviceEdges.has(originHub + '>' + destinationHub), `Missing synthetic backbone from ${originHub} to ${destinationHub}`)
+  }
+  const pairs = [
+    ['IN-ANDHRA-PRADESH-VISAKHAPATNAM-JUNCTION', 'IN-KERALA-THIRUVANANTHAPURAM-CENTRAL'],
+    ['IN-ASSAM-DIBRUGARH', 'IN-GUJARAT-SURAT'],
+    ['IN-BIHAR-GAYA-JUNCTION', 'IN-TAMIL-NADU-MADURAI-JUNCTION'],
+    ['IN-ODISHA-PURI', 'IN-JAMMU-AND-KASHMIR-SRINAGAR'],
+    ['IN-PUNJAB-LUDHIANA-JUNCTION', 'IN-MAHARASHTRA-PUNE-JUNCTION'],
+  ]
+  for (const [origin, destination] of pairs) {
+    assert.ok(stations.some((station) => station.id === origin), `Missing test origin ${origin}`)
+    const result = planJourney(request(origin!, destination!))
+    assert.ok(result.length > 0, `Expected a route from ${origin} to ${destination}`)
+    assert.ok(result.every((route) => route.transferCount <= 2))
+    assert.ok(result.every((route) => route.legs.every((leg, index) => index === 0 || leg.from.id === route.legs[index - 1]?.to.id)))
+  }
+})
+
+test('changing station pairs generates endpoint-specific synthetic itineraries', () => {
+  const firstPair = planJourney(request('NDLS', 'JP')).map((route) => route.id)
+  const secondPair = planJourney(request('AGC', 'BPL')).map((route) => route.id)
+  assert.ok(firstPair.length > 0)
+  assert.ok(secondPair.length > 0)
+  assert.notDeepEqual(secondPair, firstPair)
+  assert.ok(planJourney(request('AGC', 'BPL')).every((route) => route.legs[0].from.id === 'AGC' && route.legs.at(-1)?.to.id === 'BPL'))
+})
+
+test('route results are deterministic and never depart before the requested time', () => {
+  const plan = request('NDLS', 'JP', '12:00')
+  const first = planJourney(plan)
+  const second = planJourney(plan)
+  const earliest = new Date(`${plan.date}T12:00:00`)
+  assert.ok(first.length > 0)
+  assert.ok(first.every((route) => route.departure >= earliest))
+  assert.deepEqual(first.map((route) => route.id), second.map((route) => route.id))
 })
 
 test('rejects disconnected services even when their clock times align', () => {

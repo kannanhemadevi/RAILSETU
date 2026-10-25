@@ -1,0 +1,5 @@
+.journey-guide { display: flex; align-items: center; gap: 16px; max-width: 850px; padding: 13px 17px; border: 1px solid #d8e1eb; border-left: 4px solid #f0a40b; border-radius: 9px; background: #fff; box-shadow: 0 2px 8px rgb(16 42 67 / 5%); }
+.journey-guide svg { flex: 0 0 82px; width: 82px; height: 56px; }
+.journey-guide strong { color: #173f6f; font-size: 18px; }
+.journey-guide p { margin: 4px 0 0; color: #526579; font-size: 16px; line-height: 1.5; }
+@media(max-width:520px) { .journey-guide { align-items: flex-start; } .journey-guide svg { flex-basis: 62px; width: 62px; height: 47px; } }

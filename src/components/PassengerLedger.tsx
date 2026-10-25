@@ -1,7 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Passenger } from '../types/journey.ts'
-import type { LedgerEventType } from '../types/ledger.ts'
+import type { LedgerEventType, PassengerLedger as PassengerLedgerState } from '../types/ledger.ts'
 import { applyLedgerEvent, createLedgerEvent, createPassengerLedger, reconcileRefundCredits, syncLedgerPassengers } from '../engine/passengerLedger.ts'
+
+const STORAGE_KEY = 'railsetu-passenger-ledger-v1'
+
+function loadLedger(passengers: Passenger[]) {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) return JSON.parse(saved) as PassengerLedgerState
+  } catch { /* create a clean synthetic ledger when storage is unavailable */ }
+  return createPassengerLedger(passengers)
+}
 
 function formatPaise(amount: number): string {
   const rupees = Math.floor(amount / 100)
@@ -17,11 +27,12 @@ function parseRupeesToPaise(value: string): number | null {
 }
 
 export function PassengerLedger({ passengers }: { passengers: Passenger[] }) {
-  const [storedLedger, setStoredLedger] = useState(() => createPassengerLedger(passengers))
+  const [storedLedger, setStoredLedger] = useState(() => loadLedger(passengers))
   const [amounts, setAmounts] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
   const ledger = syncLedgerPassengers(storedLedger, passengers)
   const reconciliation = reconcileRefundCredits(ledger)
+  useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ledger)) } catch { /* local persistence is optional */ } }, [ledger])
 
   function dispatch(passengerId: string, type: LedgerEventType, refundId?: string, amountPaise?: number) {
     const event = createLedgerEvent(ledger, passengerId, type, { refundId, amountPaise })

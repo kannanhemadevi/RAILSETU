@@ -1,7 +1,13 @@
 import type { ItineraryDecision, PassengerProfile, RankingConfiguration, ScoreFactorExplanation } from './decision.ts'
 
-export type Station = { id: string; name: string; code: string; city: string }
-export type Service = { id: string; number: string; from: string; to: string; depart: string; arrive: string; days: number[]; classLabel: string; syntheticAccessibilityFeatures?: string[] }
+export type Station = { id: string; name: string; code: string; city: string; stateOrUT?: string; networkHubId?: string }
+export type TrainClassCode = '1A' | '2A' | '3A' | 'SL' | 'CC' | '2S'
+export type DemoAvailability = 'available-demo' | 'limited-demo'
+export type SeatPreferenceOption = { code: string; label: string; kind: 'berth' | 'seat' | 'none' }
+export type SyntheticClassOption = { code: TrainClassCode; name: string; demoAvailability: DemoAvailability; farePaisePerPassenger: number; description: string; seatPreferences: SeatPreferenceOption[] }
+export type JourneyLegClassSelection = { classCode: TrainClassCode; preferenceCode: string }
+export type JourneyClassSelectionState = Record<string, JourneyLegClassSelection>
+export type Service = { id: string; number: string; from: string; to: string; depart: string; arrive: string; days: number[]; classLabel: string; syntheticAccessibilityFeatures?: string[]; syntheticClasses?: SyntheticClassOption[] }
 export type Disruption = { id: string; serviceId?: string; stationId?: string; level: 'watch' | 'caution' | 'clear'; title: string; detail: string }
 export type Passenger = { id: string; name: string; category: 'Adult' | 'Senior' | 'Child' | 'Accessible' }
 export type JourneyRequest = { origin: string; destination: string; date: string; time: string; passengers: number; rankingConfiguration?: RankingConfiguration; passengerProfiles?: PassengerProfile[] }

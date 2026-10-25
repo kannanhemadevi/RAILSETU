@@ -29,19 +29,19 @@ export function createDisruptionDemoItineraries(passengers: PassengerProfile[]):
   return [
     {
       id: 'synthetic-connection',
-      legs: [trainLeg('s1', 'sim-feeder', demoDay), trainLeg('s2', 'sim-connection', demoDay)],
+      legs: [trainLeg('DEMO-1001', 'sim-feeder', demoDay), trainLeg('DEMO-1002', 'sim-connection', demoDay)],
       passengers,
       caregiverConstraints: [{ caregiverPassengerId: passengers[0]?.id ?? 'demo-caregiver', dependentPassengerIds: passengers.slice(1).map((passenger) => passenger.id), minimumTransferMinutes: 30 }],
-      accessibilityFeatures: accessibleFeatures(['s1', 's2']),
+      accessibilityFeatures: accessibleFeatures(['DEMO-1001', 'DEMO-1002']),
       scoringFactors: { arrivalTimeRisk: 0, farePaise: 160700, confirmationUncertainty: 100, synthetic: true },
       disruptionEvents: [],
       refundRecords: [],
     },
     {
       id: 'synthetic-direct-alternative',
-      legs: [trainLeg('s3', 'sim-direct', demoDay)],
+      legs: [trainLeg('DEMO-1003', 'sim-direct', demoDay)],
       passengers,
-      accessibilityFeatures: accessibleFeatures(['s3']),
+      accessibilityFeatures: accessibleFeatures(['DEMO-1003']),
       scoringFactors: { arrivalTimeRisk: 30, farePaise: 134400, confirmationUncertainty: 100, synthetic: true },
       disruptionEvents: [],
       refundRecords: [],

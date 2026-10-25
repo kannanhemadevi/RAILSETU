@@ -1,10 +1,22 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createBaselineSimulation, hasValidAlternative, inject55MinuteDelay, recommendedAlternatives, resetSimulation, syncSimulationPassengers, updateSimulationRankingConfiguration } from '../engine/disruptionSimulator.ts'
 import type { PassengerProfile, RankingConfiguration } from '../types/decision.ts'
+import type { DisruptionSimulationState } from '../engine/disruptionSimulator.ts'
+
+const STORAGE_KEY = 'railsetu-disruption-simulator-v1'
+
+function loadSimulation(passengers: PassengerProfile[], configuration: RankingConfiguration) {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) return JSON.parse(saved) as DisruptionSimulationState
+  } catch { /* start from a safe baseline when browser storage is unavailable */ }
+  return createBaselineSimulation(passengers, undefined, configuration)
+}
 
 export function DisruptionSimulator({ passengers, rankingConfiguration }: { passengers: PassengerProfile[]; rankingConfiguration: RankingConfiguration }) {
-  const [simulationState, setSimulation] = useState(() => createBaselineSimulation(passengers, undefined, rankingConfiguration))
+  const [simulationState, setSimulation] = useState(() => loadSimulation(passengers, rankingConfiguration))
   const simulation = updateSimulationRankingConfiguration(syncSimulationPassengers(simulationState, passengers), rankingConfiguration)
+  useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(simulation)) } catch { /* local persistence is optional */ } }, [simulation])
 
   const rankedAlternatives = recommendedAlternatives(simulation)
 

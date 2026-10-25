@@ -25,7 +25,10 @@ npm run preview
 ## Project structure
 
 - `src/types/journey.ts` — journey, passenger, and synthetic schedule types.
-- `src/data/railway.ts` — local synthetic station, service, and disruption fixtures.
+- `src/data/stations.ts` — typed, curated sample of 396 station records across 31 states/UTs, territory coverage metadata, duplicate checks, and station/city/state lookup. This is not a complete station register.
+- `src/data/services.ts` — deterministic synthetic hub-and-spoke timetable, service-specific class/fare/status fixtures, and demo disruption notes. Service IDs use the `DEMO-####` format.
+- `src/data/railway.ts` — compatibility exports for the station and service catalogues.
+- `src/components/StationCombobox.tsx` — keyboard-accessible searchable station selector.
 - `src/engine/planJourney.ts` — direct and up-to-two-transfer journey search and deterministic preference ranking.
 - `src/engine/decisionEngine.ts` and `src/engine/transferFeasibility.ts` — hard constraints, passenger-specific transfer validation, explanations, and ranking.
 - `src/engine/passengerLedger.ts` — simulated passenger-specific ticket/refund transitions, integer-paise amounts, and reconciliation.
@@ -36,9 +39,11 @@ npm run preview
 
 ## Ranking overview
 
-The client-side planner finds direct paths and paths with up to two transfers through the local fixtures. Hard passenger, accessibility, schedule, and transfer constraints are evaluated before scoring; a rejected itinerary never becomes recommendable because of a low fare or score. The five configurable demo weights default to arrival-time risk 30%, connection risk 30%, fare 20%, confirmation uncertainty 10%, and optional accessibility preference satisfaction 10%. These illustrative defaults are not validated optimal weights.
+The client-side planner finds direct paths and paths with up to two transfers through the local fixtures. Station spokes connect to regional hubs, and a synthetic backbone links the hubs. Search ranks generated paths; it does not use fixed search-result cards. Hard passenger, accessibility, schedule, and transfer constraints are evaluated before scoring; a rejected itinerary never becomes recommendable because of a low fare or score. The five configurable demo weights default to arrival-time risk 30%, connection risk 30%, fare 20%, confirmation uncertainty 10%, and optional accessibility preference satisfaction 10%. These illustrative defaults are not validated optimal weights.
 
 Each factor is normalized to a 0–100 desirability score, then the weighted mean is calculated as `sum(normalized factor × weight) / sum(weights)`. Lower risk and uncertainty are inverted so lower risk scores higher; synthetic fare is min–max normalized within the feasible candidate set so the lower fare scores higher; equal fares score 100. Missing or invalid factor values receive a neutral 50. Only optional accessibility preferences are scored; mandatory accessibility and caregiver requirements remain hard constraints. Routes are ordered by score descending, then lower connection risk, fewer transfers, shorter journey, lower synthetic fare, and stable itinerary ID. No randomness or current-time tie-break is used. Every schedule, fare, feature, and risk value remains synthetic demo data.
+
+The catalogue contains entries in 31 of the 36 states and Union Territories. Sikkim, Ladakh, Andaman and Nicobar Islands, Dadra and Nagar Haveli and Daman and Diu, and Lakshadweep have zero demo station entries; these omissions are a prototype limitation, not a verified statement about rail coverage. Entries are curated and should be replaced with an authoritative station register before production. The limited station-code values are filtered to codes checked against the [Railway Board's Trains at a Glance 2026 station-code index](https://rb.indianrailways.gov.in/uploads/directorate/coaching/TAG_2026/Station_Code_Index.pdf); blank codes mean no verified code is supplied in this prototype.
 
 ## Checks
 
