@@ -1,24 +1,27 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { stations } from './data/railway.ts'
 import { pageFromPath, pagePaths } from './engine/appNavigation.ts'
 import { finalizeDemoPayment } from './engine/booking.ts'
 import { buildJourneyPack } from './engine/journeyPack.ts'
+import { buildDemoTicketText } from './engine/ticketContent.ts'
 import { runDecisionEvaluation } from './engine/evaluation.ts'
 import { planJourneyDetailed } from './engine/planJourney.ts'
 import { evaluateJourneyDelay } from './engine/routeDisruption.ts'
 import { normalizeRankingWeights, resolveRankingWeights } from './engine/preferences.ts'
 import { calculateJourneyClassFare, journeyLegSelectionKey, supportedClassesForLeg, validateJourneyClassSelection } from './engine/trainSelection.ts'
 import { isLanguage, languageDirection, languageOptions, loadLanguagePreference, saveLanguagePreference, translate, translateExistingText, withLanguage } from './i18n.ts'
+import type { MessageKey } from './i18n.ts'
 import type { Language } from './i18n.ts'
 import type { DemoBooking, DemoPaymentMethod, DemoPaymentStatus } from './types/booking.ts'
 import type { EvaluationCheck } from './types/evaluation.ts'
 import type { PassengerProfile, RankingWeights } from './types/decision.ts'
-import type { JourneyClassSelectionState, JourneyOption, JourneyRequest, Passenger } from './types/journey.ts'
+import type { CarHelpPreference, JourneyClassSelectionState, JourneyOption, JourneyRequest, MealPreference, Passenger } from './types/journey.ts'
 import { RouteCard } from './components/RouteCard.tsx'
 import { StationCombobox } from './components/StationCombobox.tsx'
 import { DisruptionSimulator } from './components/DisruptionSimulator.tsx'
 import { PassengerLedger } from './components/PassengerLedger.tsx'
 import { JourneyGuide } from './components/JourneyGuide.tsx'
+import { applySeniorBerthDefaults, mealPreferenceLabelKey, pendingCarHelpPassenger, recordCarHelpPreference, setPassengerBerthPreference, setPassengerDisabilityAssistance, setPassengerMealPreference } from './engine/passengerPreferences.ts'
 import type { AssistantAction, AssistantContext } from './engine/assistant.ts'
 import './App.css'
 
@@ -55,6 +58,8 @@ const clock = (date: Date) => date.toLocaleTimeString('en-IN', { hour: '2-digit'
 const money = (paise: number) => '₹' + Math.floor(paise / 100).toLocaleString('en-IN') + '.' + String(paise % 100).padStart(2, '0')
 const duration = (minutes: number) => Math.floor(minutes / 60) + 'h ' + minutes % 60 + 'm'
 const VoiceAssistant = lazy(() => import('./components/VoiceAssistant.tsx').then((module) => ({ default: module.VoiceAssistant })))
+const TrainTrackingPanel = lazy(() => import('./components/TrainTrackingPanel.tsx').then((module) => ({ default: module.TrainTrackingPanel })))
+const PassengerDetailsPanel = lazy(() => import('./components/PassengerDetailsPanel.tsx').then((module) => ({ default: module.PassengerDetailsPanel })))
 
 function assistantNavigation(action: AssistantAction): Page {
   const target: Record<AssistantAction, Page> = { dashboard: 'dashboard', tickets: 'tickets', lab: 'lab', disruption: 'disruption', passengers: 'passengers', ledger: 'ledger', language: 'dashboard' }
@@ -80,6 +85,13 @@ function App() {
   const [classError, setClassError] = useState('')
   const [paymentMessage, setPaymentMessage] = useState('')
   const [evaluation, setEvaluation] = useState<EvaluationCheck[] | null>(null)
+  const [homeTab, setHomeTab] = useState<'planner' | 'tracking'>('planner')
+  const [assistancePromptPassengerId, setAssistancePromptPassengerId] = useState<string | null>(null)
+  const [pendingPaymentOutcome, setPendingPaymentOutcome] = useState<'success' | 'failure' | null>(null)
+  const [ageInputs, setAgeInputs] = useState<Record<string, string>>({})
+  const [ageErrors, setAgeErrors] = useState<Record<string, boolean>>({})
+  const assistanceYesRef = useRef<HTMLButtonElement>(null)
+  const paymentConfirmRef = useRef<HTMLButtonElement>(null)
   const weights = useMemo(() => resolveRankingWeights(data.rankingWeights), [data.rankingWeights])
   const normalized = useMemo(() => normalizeRankingWeights(data.rankingWeights), [data.rankingWeights])
   const configuration = useMemo(() => ({ weights }), [weights])
@@ -99,6 +111,21 @@ function App() {
     addEventListener('popstate', pop)
     return () => removeEventListener('popstate', pop)
   }, [])
+  useEffect(() => {
+    if (!assistancePromptPassengerId) return
+    assistanceYesRef.current?.focus()
+    const handleDialogKeys = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeAssistancePrompt()
+      if (event.key !== 'Tab') return
+      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-assistance-dialog] button:not(:disabled)'))
+      const first = buttons[0], last = buttons.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    }
+    window.addEventListener('keydown', handleDialogKeys)
+    return () => window.removeEventListener('keydown', handleDialogKeys)
+  }, [assistancePromptPassengerId])
   function navigate(next: Page) {
     if (location.pathname !== pagePaths[next]) history.pushState({}, '', pagePaths[next])
     setPage(next); setPaymentMessage('')
@@ -134,7 +161,10 @@ function App() {
     if (!option) { setClassError(translate(data.language,'invalidClass')); return }
     const key = journeyLegSelectionKey(route.id,index,leg.service.id)
     const preference = option.seatPreferences.find((item) => item.code === data.classSelections[key]?.preferenceCode) ?? option.seatPreferences.find((item) => item.code === 'none') ?? option.seatPreferences[0]
-    setData((old) => ({ ...old, classSelections: { ...old.classSelections, [key]: { classCode: option.code, preferenceCode: preference?.code ?? 'none' } }, paymentAttemptId: '', paymentStatus: null }))
+    setData((old) => {
+      const classSelections = { ...old.classSelections, [key]: { classCode: option.code, preferenceCode: preference?.code ?? 'none' } }
+      return { ...old, classSelections, passengers: applySeniorBerthDefaults(old.passengers, route, classSelections), paymentAttemptId: '', paymentStatus: null }
+    })
     setClassError('')
   }
   function setPreference(route: JourneyOption,index: number,code: string) {
@@ -144,7 +174,8 @@ function App() {
   }
   function continuePassenger() {
     if (!chosen || !fare || !classCheck.valid) { setClassError(t('classRequired')); return }
-    set('bookingPassengerIds',data.passengers.map((p)=>p.id)); navigate('passengerDetails')
+    const passengers = applySeniorBerthDefaults(data.passengers, chosen, data.classSelections)
+    setData((old) => ({ ...old, passengers, bookingPassengerIds: passengers.map((p) => p.id) })); navigate('passengerDetails')
   }
   function continuePayment() {
     if (!chosen || !fare || !classCheck.valid) { navigate('classes'); setClassError(t('classRequired')); return }
@@ -152,21 +183,64 @@ function App() {
     setData((old)=>({...old,paymentAttemptId:old.paymentAttemptId||crypto.randomUUID(),paymentStatus:null}))
     navigate('payment')
   }
-  function pay(outcome: 'success'|'failure') {
+  function finishPayment(outcome: 'success'|'failure', passengerOverride?: Passenger[]) {
     if (!chosen || !fare || !data.paymentAttemptId) { setPaymentMessage(t('summaryHelp')); return }
-    const result=finalizeDemoPayment({id:data.paymentAttemptId,method:data.paymentMethod,outcome},chosen,checkoutPassengers,data.classSelections,fare,data.bookings)
+    const result=finalizeDemoPayment({id:data.paymentAttemptId,method:data.paymentMethod,outcome},chosen,passengerOverride ?? checkoutPassengers,data.classSelections,fare,data.bookings)
     if (result.status==='failed-demo') { set('paymentStatus','failed-demo'); setPaymentMessage(t('failureMessage')); return }
     if (result.booking && result.status==='success-demo') { setData((old)=>({...old,bookings:[...old.bookings,result.booking!],paymentStatus:'success-demo'})); setPaymentMessage(t('success')); navigate('confirmation'); return }
     if (result.booking) { set('paymentStatus','success-demo'); navigate('confirmation'); return }
     setPaymentMessage(result.message)
+  }
+  function pay(outcome: 'success'|'failure') {
+    if (!chosen || !fare || !data.paymentAttemptId) { setPaymentMessage(t('summaryHelp')); return }
+    if (outcome === 'success') {
+      const pending = pendingCarHelpPassenger(checkoutPassengers)
+      if (pending) { setPendingPaymentOutcome(outcome); setAssistancePromptPassengerId(pending.id); return }
+    }
+    finishPayment(outcome)
+  }
+  function closeAssistancePrompt() {
+    setAssistancePromptPassengerId(null)
+    setPendingPaymentOutcome(null)
+    window.setTimeout(() => paymentConfirmRef.current?.focus(), 0)
+  }
+  function answerAssistancePrompt(choice: CarHelpPreference) {
+    if (!assistancePromptPassengerId) return
+    const updatedPassengers = recordCarHelpPreference(data.passengers, assistancePromptPassengerId, choice)
+    const updatedSelected = updatedPassengers.filter((person) => data.bookingPassengerIds.includes(person.id))
+    const next = pendingCarHelpPassenger(updatedSelected)
+    setData((old) => ({ ...old, passengers: updatedPassengers }))
+    if (next) { setAssistancePromptPassengerId(next.id); return }
+    const outcome = pendingPaymentOutcome
+    setAssistancePromptPassengerId(null)
+    setPendingPaymentOutcome(null)
+    if (outcome) finishPayment(outcome, updatedSelected)
   }
   function togglePassenger(id: string) {
     const current=data.bookingPassengerIds
     if (current.includes(id)) set('bookingPassengerIds',current.filter((item)=>item!==id))
     else if (current.length<5) set('bookingPassengerIds',[...current,id])
   }
+  function setPassengerAge(personId: string, raw: string) {
+    setAgeInputs((old) => ({ ...old, [personId]: raw }))
+    const valid = raw === '' || (/^\d+$/.test(raw) && Number(raw) >= 1 && Number(raw) <= 120)
+    setAgeErrors((old) => ({ ...old, [personId]: !valid }))
+    setData((old) => {
+      const updated = old.passengers.map((person) => person.id === personId ? { ...person, age: valid && raw ? Number(raw) : undefined } : person)
+      return { ...old, passengers: chosen ? applySeniorBerthDefaults(updated, chosen, old.classSelections) : updated }
+    })
+  }
+  function setMeal(personId: string, preference: MealPreference) {
+    setData((old) => ({ ...old, passengers: setPassengerMealPreference(old.passengers, personId, preference) }))
+  }
+  function setDisability(personId: string, selected: boolean) {
+    setData((old) => ({ ...old, passengers: setPassengerDisabilityAssistance(old.passengers, personId, selected) }))
+  }
+  function setBerthPreference(personId: string, legKey: string, preference: string) {
+    setData((old) => ({ ...old, passengers: setPassengerBerthPreference(old.passengers, personId, legKey, preference) }))
+  }
   function downloadTicket(booking: DemoBooking) {
-    const url=URL.createObjectURL(new Blob([ticketContent(booking)],{type:'text/plain;charset=utf-8'}))
+    const url=URL.createObjectURL(new Blob([buildDemoTicketText(booking,data.language)],{type:'text/plain;charset=utf-8'}))
     const link=document.createElement('a'); link.href=url; link.download='railsetu-'+booking.reference+'-demo-ticket.txt'; link.click()
     setTimeout(()=>URL.revokeObjectURL(url),1000)
   }
@@ -190,6 +264,7 @@ function App() {
     setData((old) => ({ ...withLanguage(old, language), hasSelectedLanguage: true }))
   }
   const booking=data.bookings.find((b)=>b.paymentAttemptId===data.paymentAttemptId)??data.bookings.at(-1)
+  const assistancePassenger = data.passengers.find((person) => person.id === assistancePromptPassengerId)
   const filtered=options.filter((r)=>filter==='all'||(filter==='direct'?r.transferCount===0:r.transferCount>0))
   const currentDecision=(data.routeDelayInjected?delay?.afterDelay:plan?.decisions)?.find((d)=>d.itineraryId===chosen?.id)
   const recs=(delay?.afterDelay??[]).filter((d)=>d.accepted).slice(0,4)
@@ -215,7 +290,7 @@ function App() {
   const nav=<TopNav page={page} t={t} go={navigate} count={data.passengers.length}/>
   let view
 
-  if (page==='dashboard') view=<section className="page-stack"><div className="dashboard-intro"><div><span className="eyebrow">PASSENGER JOURNEY WORKSPACE</span><h1>{t('where')}</h1><p>{t('planSynthetic')}</p></div><img src="/railsetu-logo.jpeg" alt="RAILSETU brand mark"/></div><JourneyGuide step="search" language={data.language}/><SearchPanel data={data} t={t} error={error} searching={searching} set={set} search={search} swap={()=>setData((old)=>({...old,origin:old.destination,destination:old.origin}))} count={countPassengers} add={addPassenger}/>{data.bookings.length>0&&<section className="panel"><h2>{t('recentBookings')} · {data.bookings.length}</h2><button className="button-secondary" onClick={()=>navigate('tickets')}>{t('myTickets')}</button></section>}</section>
+  if (page==='dashboard') view=<section className="page-stack"><div className="dashboard-intro"><div><span className="eyebrow">PASSENGER JOURNEY WORKSPACE</span><h1>{t('where')}</h1><p>{t('planSynthetic')}</p></div><img src="/railsetu-logo.jpeg" alt="RAILSETU brand mark"/></div><div className="home-tabs" role="tablist" aria-label={t('homeTabs')}><button type="button" role="tab" id="home-tab-planner" aria-controls="home-panel-planner" aria-selected={homeTab==='planner'} className={homeTab==='planner'?'active':''} onClick={()=>setHomeTab('planner')}>{t('homePlannerTab')}</button><button type="button" role="tab" id="home-tab-tracking" aria-controls="home-panel-tracking" aria-selected={homeTab==='tracking'} className={homeTab==='tracking'?'active':''} onClick={()=>setHomeTab('tracking')}>{t('trackingTab')}</button></div><div role="tabpanel" id={`home-panel-${homeTab}`} aria-labelledby={`home-tab-${homeTab}`} tabIndex={0}>{homeTab==='planner'?<><JourneyGuide step="search" language={data.language}/><SearchPanel data={data} t={t} error={error} searching={searching} set={set} search={search} swap={()=>setData((old)=>({...old,origin:old.destination,destination:old.origin}))} count={countPassengers} add={addPassenger}/></>:<Suspense fallback={null}><TrainTrackingPanel t={t}/></Suspense>}</div>{data.bookings.length>0&&<section className="panel"><h2>{t('recentBookings')} · {data.bookings.length}</h2><button className="button-secondary" onClick={()=>navigate('tickets')}>{t('myTickets')}</button></section>}</section>
 
   else if (page==='results') view=<section className="page-stack"><Title title={t('results')} description={data.searchRequest?stationName(data.origin)+' → '+stationName(data.destination)+' · '+data.searchRequest.date+' · after '+data.searchRequest.time:'Search to generate synthetic journey options.'} back={()=>navigate('dashboard')} backLabel={t('editSearch')}/><JourneyGuide step="train" language={data.language}/>{!data.searchRequest?<Empty title={t('noSearch')} message={t('noSearchHelp')} action={()=>navigate('dashboard')} actionLabel={t('openPlanner')}/>:options.length===0?<Empty title={t('noRoutes')} message={t('noRoutesHelp')} action={()=>navigate('dashboard')} actionLabel={t('changeSearch')}/>:<><div className="results-toolbar"><div className="filter-tabs">{(['all','direct','connecting'] as const).map((f)=><button key={f} className={filter===f?'active':''} aria-pressed={filter===f} onClick={()=>setFilter(f)}>{t(f)}</button>)}</div><span>{filtered.length} / {options.length} {t('optionsCount')}</span></div><div className="route-list">{filtered.map((route,index)=><RouteCard key={route.id} option={route} rank={index+1} selected={route.id===data.chosenRouteId} onSelect={()=>set('selectedRouteId',route.id)} onChoose={()=>reviewRoute(route.id)} onReview={()=>reviewRoute(route.id)} decision={plan?.decisions.find((item)=>item.itineraryId===route.id)} actionLabel={t('review')} t={t}/>)}</div>{selected&&<Decision route={selected} decision={selectedDecision} download={downloadPack}/>}</>}</section>
 
@@ -223,13 +298,13 @@ function App() {
 
   else if (page==='classes') view=<section className="page-stack"><Title title={t('classTitle')} description={t('classHelp')} back={()=>navigate('review')} backLabel={t('backReview')}/><JourneyGuide step="train" language={data.language}/>{!chosen?<Empty title={t('noRoute')} message={t('chooseRoute')} action={()=>navigate('results')} actionLabel={t('openResults')}/>:<section className="panel"><h2>{chosen.legs[0]!.from.name} → {chosen.legs.at(-1)!.to.name}</h2><p className="synthetic-notice">{t('classNotice')}</p>{chosen.legs.map((leg,index)=>{const key=journeyLegSelectionKey(chosen.id,index,leg.service.id);const choice=data.classSelections[key];const opts=supportedClassesForLeg(chosen,index);const cls=opts.find((item)=>item.code===choice?.classCode);return <section className="class-leg" key={key}><h3>{leg.service.id} · Leg {index+1}</h3><p>{leg.from.name} {clock(leg.departAt)} → {leg.to.name} {clock(leg.arriveAt)}</p><div className="class-grid">{opts.map((option)=><label className={'class-choice '+(choice?.classCode===option.code?'chosen':'')} key={option.code}><input type="radio" name={'class-'+key} checked={choice?.classCode===option.code} onChange={()=>setClass(chosen,index,option.code)}/><b>{option.code} · {option.name}</b><span>{t('demoStatus')}: {option.demoAvailability}</span><small>{option.description}</small><strong>{money(option.farePaisePerPassenger)} {t('perPerson')}</strong><small>{t('group')}: {money(option.farePaisePerPassenger*data.passengers.length)}</small></label>)}</div>{cls&&<label className="field berth-field"><span>SEAT / BERTH PREFERENCE</span><select value={choice?.preferenceCode??'none'} onChange={(event)=>setPreference(chosen,index,event.target.value)}>{cls.seatPreferences.map((item)=><option key={item.code} value={item.code}>{item.label}</option>)}</select></label>}</section>})}{classError&&<p className="notice-error" role="alert">{classError}</p>}<div className="fare-total"><span>{t('estimatedTotal')} · {data.passengers.length} {t('passengerCountLabel')}</span><b>{fare?money(fare.totalFarePaise):'Choose a class per leg'}</b></div><div className="button-row"><button className="button-primary" disabled={!classCheck.valid} onClick={continuePassenger}>{t('classContinue')}</button><button className="button-secondary" onClick={()=>navigate('review')}>Back to review</button></div></section>}</section>
 
-  else if (page==='passengerDetails') view=<section className="page-stack"><Title title={t('passengerDetails')} description={t('passengerDetailsHelp')} back={()=>navigate('classes')} backLabel={t('backClasses')}/><JourneyGuide step="passengers" language={data.language}/>{!chosen||!fare?<Empty title={t('completeSelection')} message={t('classRequired')} action={()=>navigate('classes')} actionLabel={t('returnClasses')}/>:<section className="panel"><h2>{t('selectPassengers')}</h2><div className="profile-checkboxes">{data.passengers.map((person)=><label key={person.id}><input type="checkbox" checked={data.bookingPassengerIds.includes(person.id)} onChange={()=>togglePassenger(person.id)}/><span><b>{person.name}</b><small>{person.category}</small></span></label>)}</div>{(!checkoutPassengers.length||checkoutPassengers.some((p)=>!p.name.trim()))&&<p className="notice-error">Select at least one passenger and complete the names.</p>}<div className="booking-summary"><h3>{t('journeySummary')}</h3><p>{chosen.legs[0]!.from.name} → {chosen.legs.at(-1)!.to.name} · {data.searchRequest?.date}</p><ul>{chosen.legs.map((leg,index)=>{const key=journeyLegSelectionKey(chosen.id,index,leg.service.id);return <li key={leg.service.id}>{leg.service.id} · {data.classSelections[key]?.classCode} · {data.classSelections[key]?.preferenceCode}</li>})}</ul><b>{money(fare.totalFarePaise)} synthetic estimate · {checkoutPassengers.length} selected</b></div>{paymentMessage&&<p className="notice-error">{paymentMessage}</p>}<div className="button-row"><button className="button-primary" disabled={!checkoutPassengers.length} onClick={continuePayment}>{t('continuePayment')}</button><button className="button-secondary" onClick={()=>navigate('classes')}>Back</button></div></section>}</section>
+  else if (page==='passengerDetails') view=<section className="page-stack"><Title title={t('passengerDetails')} description={t('passengerDetailsHelp')} back={()=>navigate('classes')} backLabel={t('backClasses')}/><JourneyGuide step="passengers" language={data.language}/>{!chosen||!fare?<Empty title={t('completeSelection')} message={t('classRequired')} action={()=>navigate('classes')} actionLabel={t('returnClasses')}/>:<Suspense fallback={null}><PassengerDetailsPanel passengers={data.passengers} selectedIds={data.bookingPassengerIds} route={chosen} classSelections={data.classSelections} fare={fare.totalFarePaise} date={data.searchRequest?.date??''} ageInputs={ageInputs} ageErrors={ageErrors} t={t} money={money} togglePassenger={togglePassenger} setClass={setClass} setAge={setPassengerAge} setMeal={setMeal} setDisability={setDisability} setBerth={setBerthPreference} continuePayment={continuePayment} back={()=>navigate('classes')} message={paymentMessage}/></Suspense>}</section>
 
-  else if (page==='payment') view=<section className="page-stack"><Title title={t('payment')} description="Local demonstration only: no gateway, bank/card credentials or real charges." back={()=>navigate('passengerDetails')} backLabel="← Back to Passenger Details"/><JourneyGuide step="payment" language={data.language}/>{!chosen||!fare?<Empty title="No complete journey summary" message="Complete route, class and passenger selection first." action={()=>navigate('passengerDetails')} actionLabel="Review passengers"/>:<div className="checkout-layout"><section className="panel"><span className="eyebrow">{t('paymentMethods')}</span><h2>{t('methodOutcome')}</h2><p>{t('noSensitive')}</p><fieldset className="payment-options"><legend>{t('method')}</legend>{([['demo-upi','Demo UPI'],['demo-card','Demo Card'],['demo-netbanking','Demo Net Banking']] as const).map(([method,label])=><label key={method}><input type="radio" name="payment-method" checked={data.paymentMethod===method} onChange={()=>set('paymentMethod',method)}/>{label}</label>)}</fieldset><fieldset className="payment-options"><legend>{t('controlledResult')}</legend><label><input type="radio" name="payment-outcome" checked={data.paymentStatus!=='failed-demo'} onChange={()=>set('paymentStatus',null)}/>{t('simulateSuccess')}</label><label><input type="radio" name="payment-outcome" checked={data.paymentStatus==='failed-demo'} onChange={()=>set('paymentStatus','failed-demo')}/>{t('simulateFailure')}</label></fieldset>{paymentMessage&&<p className={data.paymentStatus==='failed-demo'?'notice-error':'notice-success'} role="status">{paymentMessage}</p>}<div className="button-row"><button className="button-primary" onClick={()=>pay(data.paymentStatus==='failed-demo'?'failure':'success')}>{t('confirm')}</button><button className="button-danger" onClick={()=>pay('failure')}>{t('failed')}</button></div></section><BookingSummary route={chosen} fare={fare.totalFarePaise} passengers={checkoutPassengers} selections={data.classSelections}/></div>}</section>
+  else if (page==='payment') view=<section className="page-stack"><Title title={t('payment')} description={t('paymentHelp')} back={()=>navigate('passengerDetails')} backLabel={t('backClasses')}/><JourneyGuide step="payment" language={data.language}/>{!chosen||!fare?<Empty title={t('noSummary')} message={t('summaryHelp')} action={()=>navigate('passengerDetails')} actionLabel={t('reviewPassengers')}/>:<div className="checkout-layout"><section className="panel"><span className="eyebrow">{t('paymentMethods')}</span><h2>{t('methodOutcome')}</h2><p>{t('noSensitive')}</p><fieldset className="payment-options"><legend>{t('method')}</legend>{([['demo-upi','Demo UPI'],['demo-card','Demo Card'],['demo-netbanking','Demo Net Banking']] as const).map(([method,label])=><label key={method}><input type="radio" name="payment-method" checked={data.paymentMethod===method} onChange={()=>set('paymentMethod',method)}/>{label}</label>)}</fieldset><fieldset className="payment-options"><legend>{t('controlledResult')}</legend><label><input type="radio" name="payment-outcome" checked={data.paymentStatus!=='failed-demo'} onChange={()=>set('paymentStatus',null)}/>{t('simulateSuccess')}</label><label><input type="radio" name="payment-outcome" checked={data.paymentStatus==='failed-demo'} onChange={()=>set('paymentStatus','failed-demo')}/>{t('simulateFailure')}</label></fieldset>{paymentMessage&&<p className={data.paymentStatus==='failed-demo'?'notice-error':'notice-success'} role="status">{paymentMessage}</p>}<div className="button-row"><button ref={paymentConfirmRef} className="button-primary" onClick={()=>pay(data.paymentStatus==='failed-demo'?'failure':'success')}>{t('confirm')}</button><button className="button-danger" onClick={()=>pay('failure')}>{t('failed')}</button></div></section><BookingSummary route={chosen} fare={fare.totalFarePaise} passengers={checkoutPassengers} selections={data.classSelections} t={t}/></div>}{assistancePromptPassengerId&&assistancePassenger&&<div className="assistance-modal-backdrop"><section className="assistance-modal" role="dialog" aria-modal="true" aria-labelledby="car-help-heading" aria-describedby="car-help-description" data-assistance-dialog><button type="button" className="assistance-modal-close" aria-label={t('dismissDialog')} onClick={closeAssistancePrompt}>×</button><span className="eyebrow">{t('disabilityLabel')}</span><h2 id="car-help-heading">{t('carHelpFor')} {assistancePassenger.name}</h2><p id="car-help-description" className="assistance-question">{t('carHelpQuestion')}</p><p className="assistance-demo-note">{t('carHelpDemo')}</p><div className="button-row"><button ref={assistanceYesRef} type="button" className="button-primary" onClick={()=>answerAssistancePrompt('yes')}>{t('carHelpYes')}</button><button type="button" className="button-secondary" onClick={()=>answerAssistancePrompt('no')}>{t('carHelpNo')}</button><button type="button" className="button-secondary" onClick={closeAssistancePrompt}>{t('dismissDialog')}</button></div></section></div>}</section>
 
-  else if (page==='confirmation') view=<section className="page-stack"><Title title={t('confirmation')} description={t('confirmationHelp')}/><JourneyGuide step="ticket" language={data.language}/>{!booking?<Empty title={t('noBooking')} message={t('finishPayment')} action={()=>navigate('dashboard')} actionLabel={t('planJourney')}/>:<TicketCard booking={booking} download={()=>downloadTicket(booking)}/>}<div className="button-row"><button className="button-primary" onClick={()=>navigate('tickets')}>Open My Tickets</button><button className="button-secondary" onClick={()=>navigate('dashboard')}>Plan another journey</button></div></section>
+  else if (page==='confirmation') view=<section className="page-stack"><Title title={t('confirmation')} description={t('confirmationHelp')}/><JourneyGuide step="ticket" language={data.language}/>{!booking?<Empty title={t('noBooking')} message={t('finishPayment')} action={()=>navigate('dashboard')} actionLabel={t('planJourney')}/>:<TicketCard booking={booking} download={()=>downloadTicket(booking)} language={data.language}/>}<div className="button-row"><button className="button-primary" onClick={()=>navigate('tickets')}>Open My Tickets</button><button className="button-secondary" onClick={()=>navigate('dashboard')}>Plan another journey</button></div></section>
 
-  else if (page==='tickets') view=<section className="page-stack"><Title title={t('tickets')} description="Local simulated booking records created in this browser."/><JourneyGuide step="ticket" language={data.language}/>{data.bookings.length?<div className="ticket-list">{[...data.bookings].reverse().map((item)=><TicketCard key={item.reference} booking={item} download={()=>downloadTicket(item)}/>)}</div>:<Empty title={t('noTickets')} message={t('ticketsEmpty')} action={()=>navigate('dashboard')} actionLabel={t('planJourney')}/>}</section>
+  else if (page==='tickets') view=<section className="page-stack"><Title title={t('tickets')} description="Local simulated booking records created in this browser."/><JourneyGuide step="ticket" language={data.language}/>{data.bookings.length?<div className="ticket-list">{[...data.bookings].reverse().map((item)=><TicketCard key={item.reference} booking={item} download={()=>downloadTicket(item)} language={data.language}/>)}</div>:<Empty title={t('noTickets')} message={t('ticketsEmpty')} action={()=>navigate('dashboard')} actionLabel={t('planJourney')}/>}</section>
 
   else if (page==='passengers') view=<section className="page-stack"><Title title={t('passengers')} description="Manage local profiles for route constraints and demo checkout."/><section className="panel"><div className="panel-heading"><div><span className="eyebrow">LOCAL PROFILES · MAXIMUM FIVE</span><h2>{data.passengers.length} of 5</h2></div><button className="button-primary" disabled={data.passengers.length>=5} onClick={()=>setData((old)=>({...old,passengers:[...old.passengers,{id:crypto.randomUUID(),name:'Passenger '+(old.passengers.length+1),category:'Adult'}]}))}>＋ Add passenger</button></div><div className="saved-passenger-list">{data.passengers.map((person,index)=><div className="saved-passenger" key={person.id}><span className="passenger-number">{String(index+1).padStart(2,'0')}</span><label className="field"><span>PASSENGER NAME</span><input value={person.name} onChange={(event)=>setData((old)=>({...old,passengers:old.passengers.map((p)=>p.id===person.id?{...p,name:event.target.value}:p)}))}/></label><label className="field"><span>TRAVELLER TYPE</span><select value={person.category} onChange={(event)=>setData((old)=>({...old,passengers:old.passengers.map((p)=>p.id===person.id?{...p,category:event.target.value as Passenger['category']}:p)}))}>{['Adult','Senior','Child','Accessible'].map((category)=><option key={category}>{category}</option>)}</select></label><button className="button-secondary" disabled={data.passengers.length<=1} onClick={()=>setData((old)=>({...old,passengers:old.passengers.filter((p)=>p.id!==person.id),bookingPassengerIds:old.bookingPassengerIds.filter((id)=>id!==person.id)}))}>Remove</button></div>)}</div><p className="synthetic-notice">Profiles persist locally in this browser; storage is not secure or server-backed.</p></section></section>
 
@@ -264,9 +339,8 @@ function stationName(id:string){return stations.find((station)=>station.id===id)
 function Decision({route,decision,download}:{route:JourneyOption;decision:ReturnType<typeof planJourneyDetailed>['decisions'][number]|undefined;download:()=>void}){return <section className="decision-summary"><div className="panel-heading"><div><span className="eyebrow">WHY THIS ROUTE RANKS HERE</span><h2>Recommendation explanation</h2></div><button className="button-secondary" onClick={download}>Download journey pack</button></div><p>{decision?.rankingExplanation??route.rankingExplanation}</p><div className="decision-factors">{decision?.scoreExplanations.map((factor)=><article key={factor.factor}><b>{factor.factor.replaceAll(/([A-Z])/g,' $1')}</b><span>{factor.normalizedScore}/100 · {factor.weight}% weight</span><small>{factor.explanation}</small></article>)}</div><details><summary>Feasibility and assumptions</summary><ul>{decision?.explanations.map((item,index)=><li key={item.code+index}>{item.status}: {item.message}</li>)}</ul><p>Generated from synthetic schedules and fares only.</p></details></section>}
 function Legs({route}:{route:JourneyOption}){return <div className="leg-review-list">{route.legs.map((leg,index)=><div className="leg-review-row" key={leg.service.id}><b>Leg {index+1} · {leg.service.id}</b><span>{leg.from.name} {clock(leg.departAt)} → {leg.to.name} {clock(leg.arriveAt)}</span><span>{duration(Math.round((leg.arriveAt.getTime()-leg.departAt.getTime())/60000))}</span></div>)}</div>}
 function RouteTable({options,selected,choose,review}:{options:JourneyOption[];selected:string;choose:(id:string)=>void;review:(id:string)=>void}){return <div className="table-overflow"><table className="route-table"><thead><tr><th>Rank</th><th>Generated service path</th><th>Duration</th><th>Transfers</th><th>Margins</th><th>Risk</th><th>Action</th></tr></thead><tbody>{options.map((route,index)=><tr key={route.id} className={route.id===selected?'selected-row':''}><td>{index+1}</td><th><button className="link-button" onClick={()=>choose(route.id)}>{route.legs.map((leg)=>leg.service.id).join(' → ')}</button><small>{route.legs[0]!.from.name} → {route.legs.at(-1)!.to.name}</small></th><td>{duration(route.durationMinutes)}</td><td>{route.transferCount}</td><td>{route.bufferMinutes.length?route.bufferMinutes.map((n)=>n+'m').join(' / '):'—'}</td><td>{route.risk}/100</td><td><button className="button-small" onClick={()=>review(route.id)}>Review</button></td></tr>)}</tbody></table></div>}
-function BookingSummary({route,fare,passengers,selections}:{route:JourneyOption;fare:number;passengers:Passenger[];selections:JourneyClassSelectionState}){return <aside className="panel booking-aside"><span className="eyebrow">SIMULATED CHECKOUT SUMMARY</span><h2>{route.legs[0]!.from.name} → {route.legs.at(-1)!.to.name}</h2><p>{route.legs.map((leg)=>leg.service.id).join(' · ')}</p><p>{route.transferCount} transfers · {duration(route.durationMinutes)}</p><h3>Passengers</h3><ul>{passengers.map((p)=><li key={p.id}>{p.name} · {p.category}</li>)}</ul><h3>Classes per leg</h3><ul>{route.legs.map((leg,index)=>{const key=journeyLegSelectionKey(route.id,index,leg.service.id);return <li key={leg.service.id}>{leg.service.id} · {selections[key]?.classCode} · {selections[key]?.preferenceCode}</li>})}</ul><div className="fare-total"><span>Demo estimated total</span><b>{money(fare)}</b></div></aside>}
-function TicketCard({booking,download}:{booking:DemoBooking;download:()=>void}){return <article className="panel ticket-card"><div className="ticket-head"><div><span className="eyebrow">SIMULATED BOOKING · NOT A VALID RAILWAY TICKET</span><h2>{booking.reference}</h2></div><span className="decision-status">{booking.paymentStatus}</span></div><p>Payment method: {booking.paymentMethod} · {new Date(booking.createdAt).toLocaleString()}</p><h3>{booking.itinerary.legs[0]!.from.name} → {booking.itinerary.legs.at(-1)!.to.name}</h3><p>{duration(booking.itinerary.durationMinutes)} · {booking.itinerary.transferCount} transfers · {booking.passengers.length} passengers</p><div className="table-overflow"><table className="route-table"><thead><tr><th>Passenger</th><th>Service</th><th>Class</th><th>Preference</th><th>Estimated fare</th></tr></thead><tbody>{booking.passengers.flatMap((passenger)=>booking.itinerary.legs.map((leg,index)=>{const key=journeyLegSelectionKey(booking.itinerary.id,index,leg.service.id);const choice=booking.classSelections[key];const option=leg.service.syntheticClasses?.find((item)=>item.code===choice?.classCode);return <tr key={passenger.id+leg.service.id}><td>{passenger.name}</td><td>{leg.service.id}<small>{leg.from.name} {clock(leg.departAt)} → {leg.to.name} {clock(leg.arriveAt)}</small></td><td>{option?.code} · {option?.name}</td><td>{option?.seatPreferences.find((x)=>x.code===choice?.preferenceCode)?.label}</td><td>{money(option?.farePaisePerPassenger??0)}</td></tr>}))}</tbody></table></div><div className="fare-total"><span>Simulated payment · no charge</span><b>{money(booking.fare.totalFarePaise)}</b></div><button className="button-primary" onClick={download}>{translate('en','download')}</button><p className="synthetic-notice">This local demo confirmation is not a ticket, does not reserve a seat and cannot be used for travel.</p></article>}
-function ticketContent(booking:DemoBooking){const legs=booking.itinerary.legs.map((leg,index)=>{const key=journeyLegSelectionKey(booking.itinerary.id,index,leg.service.id);const choice=booking.classSelections[key];const option=leg.service.syntheticClasses?.find((x)=>x.code===choice?.classCode);return (index+1)+'. '+leg.service.id+' · '+leg.from.name+' '+clock(leg.departAt)+' → '+leg.to.name+' '+clock(leg.arriveAt)+' · '+option?.code+' '+option?.name+' · '+choice?.preferenceCode}).join('\\n');return ['RAILSETU SIMULATED DEMO CONFIRMATION','NOT A VALID INDIAN RAILWAYS TICKET. No seat is reserved and no real payment was taken.','Booking reference: '+booking.reference,'Payment status: '+booking.paymentStatus+' via '+booking.paymentMethod,'Passengers: '+booking.passengers.map((p)=>p.name+' ('+p.category+')').join(', '),'Journey: '+booking.itinerary.legs[0]!.from.name+' → '+booking.itinerary.legs.at(-1)!.to.name,'Estimated demo fare: '+money(booking.fare.totalFarePaise),'Legs and classes:',legs].join('\\n\\n')}
+function BookingSummary({route,fare,passengers,selections,t}:{route:JourneyOption;fare:number;passengers:Passenger[];selections:JourneyClassSelectionState;t:(key:MessageKey)=>string}){return <aside className="panel booking-aside"><span className="eyebrow">{t('simulatedBooking')}</span><h2>{route.legs[0]!.from.name} → {route.legs.at(-1)!.to.name}</h2><p>{route.legs.map((leg)=>leg.service.id).join(' · ')}</p><p>{route.transferCount} {t('transferCount')} · {duration(route.durationMinutes)}</p><h3>{t('passengersLabel')}</h3><ul>{passengers.map((person)=><li key={person.id}><b>{person.name}</b> · {person.age?`${t('ageLabel')}: ${person.age} · `:''}{t('mealPreferenceLabel')}: {t(mealPreferenceLabelKey(person.mealPreference??'no-meal'))}{person.passengerWithDisabilities?` · ${t('disabilityLabel')}: ${person.carHelpPreference==='yes'?t('carHelpYes'):person.carHelpPreference==='no'?t('carHelpNo'):t('carHelpPending')}`:''}</li>)}</ul><h3>{t('coachPreference')}</h3><ul>{route.legs.map((leg,index)=>{const key=journeyLegSelectionKey(route.id,index,leg.service.id);return <li key={leg.service.id}>{leg.service.id} · {selections[key]?.classCode} · {t('preference')}: {selections[key]?.preferenceCode}<ul>{passengers.map((person)=><li key={person.id}>{person.name}: {person.berthPreferences?.[key]??selections[key]?.preferenceCode}</li>)}</ul></li>})}</ul><div className="fare-total"><span>{t('demoFare')} · {t('noPayment')}</span><b>{money(fare)}</b></div></aside>}
+function TicketCard({booking,download,language}:{booking:DemoBooking;download:()=>void;language:Language}){const t=(key:MessageKey)=>translate(language,key);return <article className="panel ticket-card"><div className="ticket-head"><div><span className="eyebrow">{t('simulatedBooking')}</span><h2>{booking.reference}</h2></div><span className="decision-status">{booking.paymentStatus}</span></div><p>{t('paymentMethod')}: {booking.paymentMethod} · {new Date(booking.createdAt).toLocaleString()}</p><h3>{booking.itinerary.legs[0]!.from.name} → {booking.itinerary.legs.at(-1)!.to.name}</h3><p>{duration(booking.itinerary.durationMinutes)} · {booking.itinerary.transferCount} {t('transferCount')} · {booking.passengers.length} {t('passengerCountLabel')}</p><div className="table-overflow"><table className="route-table"><thead><tr><th>{t('passenger')}</th><th>{t('service')}</th><th>{t('class')}</th><th>{t('preference')}</th><th>{t('estimatedFare')}</th></tr></thead><tbody>{booking.passengers.flatMap((passenger)=>booking.itinerary.legs.map((leg,index)=>{const key=journeyLegSelectionKey(booking.itinerary.id,index,leg.service.id);const choice=booking.classSelections[key];const option=leg.service.syntheticClasses?.find((item)=>item.code===choice?.classCode);const preferenceCode=passenger.berthPreferences?.[key]??choice?.preferenceCode;return <tr key={passenger.id+leg.service.id}><td>{passenger.name}<small>{t('mealPreferenceLabel')}: {t(mealPreferenceLabelKey(passenger.mealPreference??'no-meal'))}</small>{passenger.age&&<small>{t('ageLabel')}: {passenger.age}</small>}{passenger.passengerWithDisabilities&&<small>{t('disabilityLabel')}: {passenger.carHelpPreference==='yes'?t('carHelpYes'):passenger.carHelpPreference==='no'?t('carHelpNo'):t('carHelpPending')}</small>}</td><td>{leg.service.id}<small>{leg.from.name} {clock(leg.departAt)} → {leg.to.name} {clock(leg.arriveAt)}</small></td><td>{option?.code} · {option?.name}</td><td>{option?.seatPreferences.find((item)=>item.code===preferenceCode)?.label}</td><td>{money(option?.farePaisePerPassenger??0)}</td></tr>}))}</tbody></table></div><div className="fare-total"><span>{t('simulatedPayment')}</span><b>{money(booking.fare.totalFarePaise)}</b></div><button className="button-primary" onClick={download}>{t('download')}</button><p className="synthetic-notice">{t('invalidTicket')}</p></article>}
 function EvaluationTable({checks}:{checks:EvaluationCheck[]}){return <div className="table-overflow"><p><b>{checks.filter((x)=>x.passed).length} / {checks.length}</b> in-app checks passed</p><table className="route-table"><thead><tr><th>Result</th><th>Rule check</th><th>Observed output</th></tr></thead><tbody>{checks.map((x)=><tr key={x.id}><td className={x.passed?'pass-text':'fail-text'}>{x.passed?'PASS':'FAIL'}</td><th>{x.label}</th><td>{x.detail}</td></tr>)}</tbody></table></div>}
 
 export default App

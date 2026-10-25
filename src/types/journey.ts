@@ -9,7 +9,20 @@ export type JourneyLegClassSelection = { classCode: TrainClassCode; preferenceCo
 export type JourneyClassSelectionState = Record<string, JourneyLegClassSelection>
 export type Service = { id: string; number: string; from: string; to: string; depart: string; arrive: string; days: number[]; classLabel: string; syntheticAccessibilityFeatures?: string[]; syntheticClasses?: SyntheticClassOption[] }
 export type Disruption = { id: string; serviceId?: string; stationId?: string; level: 'watch' | 'caution' | 'clear'; title: string; detail: string }
-export type Passenger = { id: string; name: string; category: 'Adult' | 'Senior' | 'Child' | 'Accessible' }
+export type MealPreference = 'vegetarian' | 'non-vegetarian' | 'jain' | 'no-meal'
+export type CarHelpPreference = 'yes' | 'no'
+export type Passenger = {
+  id: string
+  name: string
+  category: 'Adult' | 'Senior' | 'Child' | 'Accessible'
+  age?: number
+  mealPreference?: MealPreference
+  passengerWithDisabilities?: boolean
+  carHelpPreference?: CarHelpPreference
+  /** Per passenger and itinerary leg. Values are class-specific and demo preferences only. */
+  berthPreferences?: Record<string, string>
+  berthPreferenceSources?: Record<string, 'automatic' | 'manual'>
+}
 export type JourneyRequest = { origin: string; destination: string; date: string; time: string; passengers: number; rankingConfiguration?: RankingConfiguration; passengerProfiles?: PassengerProfile[] }
 export type JourneyLeg = { service: Service; from: Station; to: Station; departAt: Date; arriveAt: Date }
 export type JourneyOption = { id: string; legs: JourneyLeg[]; departure: Date; arrival: Date; durationMinutes: number; transferCount: number; bufferMinutes: number[]; risk: number; score: number; fare: number; reasons: string[]; scoreExplanations?: ScoreFactorExplanation[]; rankingExplanation?: string }

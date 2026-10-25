@@ -1,0 +1,38 @@
+import type { MessageKey } from '../i18n.ts'
+import type { JourneyClassSelectionState, JourneyOption, MealPreference, Passenger } from '../types/journey.ts'
+import { mealPreferenceLabelKey } from '../engine/passengerPreferences.ts'
+import { journeyLegSelectionKey, supportedClassesForLeg } from '../engine/trainSelection.ts'
+
+type Props = {
+  passengers: Passenger[]; selectedIds: string[]; route: JourneyOption; classSelections: JourneyClassSelectionState
+  fare: number; date: string; ageInputs: Record<string, string>; ageErrors: Record<string, boolean>
+  t: (key: MessageKey) => string; money: (paise: number) => string
+  togglePassenger: (id: string) => void; setClass: (route: JourneyOption, index: number, code: string) => void
+  setAge: (id: string, raw: string) => void; setMeal: (id: string, value: MealPreference) => void
+  setDisability: (id: string, value: boolean) => void; setBerth: (id: string, key: string, value: string) => void
+  continuePayment: () => void; back: () => void; message: string
+}
+
+export function PassengerDetailsPanel({ passengers, selectedIds, route, classSelections, fare, date, ageInputs, ageErrors, t, money, togglePassenger, setClass, setAge, setMeal, setDisability, setBerth, continuePayment, back, message }: Props) {
+  const selected = passengers.filter((person) => selectedIds.includes(person.id))
+  return <section className="panel passenger-details-panel">
+    <h2>{t('selectPassengers')}</h2>
+    <div className="profile-checkboxes">{passengers.map((person)=><label key={person.id}><input type="checkbox" checked={selectedIds.includes(person.id)} onChange={()=>togglePassenger(person.id)}/><span><b>{person.name}</b><small>{person.category}{person.age ? ` · ${person.age}` : ''}</small></span></label>)}</div>
+    {(!selected.length||selected.some((person)=>!person.name.trim()))&&<p className="notice-error" role="alert">{t('selectPassengerHelp')}</p>}
+    <section className="passenger-preferences"><div><span className="eyebrow">{t('coachPreference')}</span><h3>{t('coachPreference')}</h3><p>{t('coachHelp')}</p></div>
+      <div className="coach-choice-grid">{route.legs.map((leg,index)=>{const key=journeyLegSelectionKey(route.id,index,leg.service.id);const options=supportedClassesForLeg(route,index);const current=classSelections[key];return <label className="field" key={key}><span>{leg.service.id} · {leg.from.name} → {leg.to.name}</span><select aria-label={`${t('coachPreference')} ${leg.service.id}`} value={current?.classCode??''} disabled={!options.length} onChange={(event)=>setClass(route,index,event.target.value)}><option value="">{t('required')}</option>{options.map((option)=><option key={option.code} value={option.code}>{option.code} · {option.name}</option>)}</select>{!options.length&&<small className="notice-error">{t('coachUnsupported')}</small>}</label>})}</div>
+    </section>
+    <section className="passenger-preferences"><div><span className="eyebrow">{t('mealPreferences')}</span><h3>{t('mealPreferences')}</h3><p>{t('mealDemoNotice')}</p></div>
+      <div className="checkout-passenger-list">{selected.map((person)=><article className="checkout-passenger" key={person.id}><h4>{person.name}</h4><div className="preference-fields"><label className="field"><span>{t('ageLabel')}</span><input type="number" min="1" max="120" step="1" inputMode="numeric" value={ageInputs[person.id]??(person.age===undefined?'':String(person.age))} aria-invalid={Boolean(ageErrors[person.id])} aria-describedby={ageErrors[person.id]?`age-error-${person.id}`:undefined} onChange={(event)=>setAge(person.id,event.target.value)}/>{ageErrors[person.id]&&<small className="field-error" id={`age-error-${person.id}`}>{t('ageInvalid')}</small>}</label>
+        <label className="field"><span>{t('mealPreferenceLabel')}</span><select value={person.mealPreference??'no-meal'} onChange={(event)=>setMeal(person.id,event.target.value as MealPreference)}><option value="vegetarian">{t('mealVegetarian')}</option><option value="non-vegetarian">{t('mealNonVegetarian')}</option><option value="jain">{t('mealJain')}</option><option value="no-meal">{t('mealNone')}</option></select></label></div>
+        <label className="disability-choice"><input type="checkbox" checked={Boolean(person.passengerWithDisabilities)} onChange={(event)=>setDisability(person.id,event.target.checked)}/><span>{t('disabilityLabel')}</span></label>
+        {person.passengerWithDisabilities&&<p className="assistance-status" role="status">{person.carHelpPreference ? `${t('carHelpFor')} ${person.carHelpPreference==='yes'?t('carHelpYes'):t('carHelpNo')}` : t('carHelpPromptPending')}</p>}
+        {route.legs.map((leg,index)=>{const key=journeyLegSelectionKey(route.id,index,leg.service.id);const classChoice=classSelections[key];const cls=supportedClassesForLeg(route,index).find((item)=>item.code===classChoice?.classCode);const berthOptions=cls?.seatPreferences.filter((item)=>item.kind==='berth'||item.kind==='none')??[];if(!berthOptions.some((item)=>item.code==='lower'))return null;const value=berthOptions.some((item)=>item.code===person.berthPreferences?.[key])?person.berthPreferences![key]!:classChoice?.preferenceCode??'none';return <div className="passenger-berth-field" key={key}><label className="field"><span>{t('berthPreferenceFor')} {person.name} · {leg.service.id}</span><select value={value} onChange={(event)=>setBerth(person.id,key,event.target.value)}>{berthOptions.map((option)=><option key={option.code} value={option.code}>{option.label}</option>)}</select></label>{person.berthPreferenceSources?.[key]==='automatic'&&person.berthPreferences?.[key]==='lower'&&<p className="senior-berth-note">{t('seniorBerthAuto')}</p>}</div>})}
+      </article>)}</div>
+    </section>
+    <p className="synthetic-notice">{t('preferenceDemoNotice')}</p>
+    <div className="booking-summary"><h3>{t('journeySummary')}</h3><p>{route.legs[0]!.from.name} → {route.legs.at(-1)!.to.name} · {date}</p><ul>{route.legs.map((leg,index)=>{const key=journeyLegSelectionKey(route.id,index,leg.service.id);const cls=supportedClassesForLeg(route,index).find((item)=>item.code===classSelections[key]?.classCode);return <li key={leg.service.id}>{leg.service.id} · {cls?.code??'—'} · {classSelections[key]?.preferenceCode??'—'}</li>})}</ul><ul className="passenger-summary-list">{selected.map((person)=><li key={person.id}><b>{person.name}</b> · {t('mealPreferenceLabel')}: {t(mealPreferenceLabelKey(person.mealPreference??'no-meal'))}{person.passengerWithDisabilities?` · ${t('disabilityLabel')}: ${person.carHelpPreference==='yes'?t('carHelpYes'):person.carHelpPreference==='no'?t('carHelpNo'):t('carHelpPending')}`:''}{person.age?` · ${t('ageLabel')}: ${person.age}`:''}<small className="passenger-berth-summary">{route.legs.map((leg,index)=>{const key=journeyLegSelectionKey(route.id,index,leg.service.id);return `${leg.service.id}: ${person.berthPreferences?.[key]??classSelections[key]?.preferenceCode??'—'}`}).join(' · ')}</small></li>)}</ul><b>{money(fare)} {t('estimateSelected')} · {selected.length} {t('passengerCountLabel')}</b></div>
+    {message&&<p className="notice-error" role="alert">{message}</p>}
+    <div className="button-row"><button className="button-primary" disabled={!selected.length||selected.some((person)=>!person.name.trim())||selected.some((person)=>ageErrors[person.id])} onClick={continuePayment}>{t('continuePayment')}</button><button className="button-secondary" onClick={back}>{t('back')}</button></div>
+  </section>
+}

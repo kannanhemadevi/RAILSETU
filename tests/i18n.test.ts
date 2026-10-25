@@ -48,3 +48,14 @@ test('validation messages change with locale and Urdu selects RTL direction', ()
   }
   assert.equal(translateExistingText('en', 'hi', translate('en', 'searchErrorSame')), translate('hi', 'searchErrorSame'))
 })
+
+test('new tracking and passenger preference labels are translated for all seven locales', () => {
+  assert.equal(translate('en','carHelpQuestion'),'Do you require CAR HELP / HELPER assistance to guide you during boarding and your train journey?')
+  for (const language of languageOptions.map((option)=>option.code)) {
+    for (const key of ['trackingTab','trackingDemoNotice','trackTrain','trackingUnavailable','coachPreference','mealVegetarian','mealNonVegetarian','mealJain','mealNone','disabilityLabel','carHelpQuestion','carHelpYes','carHelpNo','seniorBerthAuto'] as const) {
+      assert.ok(translate(language,key).length > 0,`${language}:${key}`)
+      if (language !== 'en') assert.notEqual(translate(language,key),translate('en',key),`${language}:${key} should be translated`)
+    }
+  }
+  assert.equal(translate('ur','trackingTab').length > 0,true)
+})
