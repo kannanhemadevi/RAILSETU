@@ -48,18 +48,21 @@ test('booking snapshot and downloadable demo ticket preserve passenger meal, dis
   const classSelections = { ...selections, [key]: { classCode: lowerClass.code, preferenceCode: 'lower' } }
   const classFare = calculateJourneyClassFare(route,1,classSelections)!
   const detailedPassenger = {
-    id: 'preferences-passenger', name: 'Asha Rao', category: 'Senior' as const, age: 61,
+    id: 'preferences-passenger', name: 'Asha Rao', category: 'Senior' as const, age: 61, seniorCitizen: true,
     mealPreference: 'jain' as const, passengerWithDisabilities: true, carHelpPreference: 'no' as const,
     berthPreferences: { [key]: 'lower' }, berthPreferenceSources: { [key]: 'automatic' as const },
   }
   const result = finalizeDemoPayment({ id: 'preferences-attempt', method: 'demo-upi', outcome: 'success' }, route, [detailedPassenger], classSelections, classFare, [], '2030-01-07T10:00:00.000Z')
   assert.equal(result.status,'success-demo')
   assert.deepEqual(result.booking?.passengers[0],detailedPassenger)
+  assert.equal(result.booking?.passengers[0]?.seniorCitizen, true)
+  assert.equal(result.booking?.passengers[0]?.carHelpPreference, 'no')
   assert.equal(result.booking?.classSelections[key]?.classCode,lowerClass.code)
   const text = buildDemoTicketText(result.booking!,'en')
   assert.match(text,/Jain/)
   assert.match(text,/Passenger with Disabilities \(Divyangjan\)/)
   assert.match(text,/No/)
   assert.match(text,/lower/)
+  assert.match(text,/Senior Citizen: Yes/)
   assert.match(text,new RegExp(leg.service.id))
 })

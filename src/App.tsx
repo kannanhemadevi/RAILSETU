@@ -21,7 +21,7 @@ import { StationCombobox } from './components/StationCombobox.tsx'
 import { DisruptionSimulator } from './components/DisruptionSimulator.tsx'
 import { PassengerLedger } from './components/PassengerLedger.tsx'
 import { JourneyGuide } from './components/JourneyGuide.tsx'
-import { applySeniorBerthDefaults, mealPreferenceLabelKey, pendingCarHelpPassenger, recordCarHelpPreference, setPassengerBerthPreference, setPassengerDisabilityAssistance, setPassengerMealPreference } from './engine/passengerPreferences.ts'
+import { applySeniorBerthDefaults, haveCarHelpAnswers, mealPreferenceLabelKey, pendingCarHelpPassenger, qualifiesForSeniorBerthDefault, recordCarHelpPreference, setPassengerBerthPreference, setPassengerDisabilityAssistance, setPassengerMealPreference, setPassengerSeniorCitizen, updatePassengerAge } from './engine/passengerPreferences.ts'
 import type { AssistantAction, AssistantContext } from './engine/assistant.ts'
 import './App.css'
 
@@ -51,7 +51,7 @@ function loadState(): AppState {
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as Partial<AppState> | null
     const preferredLanguage = loadLanguagePreference(localStorage)
-    return value ? { ...fallback, ...value, language: preferredLanguage ?? (isLanguage(value.language) ? value.language : fallback.language), hasSelectedLanguage: Boolean(preferredLanguage), passengers: value.passengers?.length ? value.passengers : fallback.passengers, bookings: (value.bookings ?? []).map(restoreBooking) } : { ...fallback, language: preferredLanguage ?? 'en', hasSelectedLanguage: Boolean(preferredLanguage) }
+    return value ? { ...fallback, ...value, language: preferredLanguage ?? (isLanguage(value.language) ? value.language : fallback.language), hasSelectedLanguage: Boolean(preferredLanguage), passengers: (value.passengers?.length ? value.passengers : fallback.passengers).map((passenger) => qualifiesForSeniorBerthDefault(passenger.age) ? { ...passenger, seniorCitizen: true } : passenger), bookings: (value.bookings ?? []).map(restoreBooking) } : { ...fallback, language: preferredLanguage ?? 'en', hasSelectedLanguage: Boolean(preferredLanguage) }
   } catch { return fallback }
 }
 const clock = (date: Date) => date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })
@@ -95,7 +95,7 @@ function App() {
   const weights = useMemo(() => resolveRankingWeights(data.rankingWeights), [data.rankingWeights])
   const normalized = useMemo(() => normalizeRankingWeights(data.rankingWeights), [data.rankingWeights])
   const configuration = useMemo(() => ({ weights }), [weights])
-  const profiles = useMemo<PassengerProfile[]>(() => data.passengers.map((p) => ({ id: p.id, name: p.name, category: p.category.toLowerCase() as PassengerProfile['category'], optionalAccessibilityFeatures: data.optionalAccessibilityPreference ? [data.optionalAccessibilityPreference] : [] })), [data.passengers, data.optionalAccessibilityPreference])
+  const profiles = useMemo<PassengerProfile[]>(() => data.passengers.map((p) => ({ id: p.id, name: p.name, category: p.seniorCitizen || p.category === 'Senior' ? 'senior' : p.category.toLowerCase() as PassengerProfile['category'], optionalAccessibilityFeatures: data.optionalAccessibilityPreference ? [data.optionalAccessibilityPreference] : [] })), [data.passengers, data.optionalAccessibilityPreference])
   const plan = useMemo(() => data.searchRequest ? planJourneyDetailed({ ...data.searchRequest, passengerProfiles: profiles, rankingConfiguration: configuration }) : null, [data.searchRequest, profiles, configuration])
   const options = plan?.options ?? EMPTY_OPTIONS
   const chosen = options.find((r) => r.id === data.chosenRouteId)
@@ -180,6 +180,7 @@ function App() {
   function continuePayment() {
     if (!chosen || !fare || !classCheck.valid) { navigate('classes'); setClassError(t('classRequired')); return }
     if (!checkoutPassengers.length || checkoutPassengers.some((p)=>!p.name.trim())) { setPaymentMessage(t('selectPassengerHelp')); return }
+    if (!haveCarHelpAnswers(checkoutPassengers)) { setPaymentMessage(t('carHelpPromptPending')); return }
     setData((old)=>({...old,paymentAttemptId:old.paymentAttemptId||crypto.randomUUID(),paymentStatus:null}))
     navigate('payment')
   }
@@ -223,10 +224,10 @@ function App() {
   }
   function setPassengerAge(personId: string, raw: string) {
     setAgeInputs((old) => ({ ...old, [personId]: raw }))
-    const valid = raw === '' || (/^\d+$/.test(raw) && Number(raw) >= 1 && Number(raw) <= 120)
-    setAgeErrors((old) => ({ ...old, [personId]: !valid }))
+    const ageResult = updatePassengerAge(data.passengers, personId, raw)
+    setAgeErrors((old) => ({ ...old, [personId]: !ageResult.valid }))
     setData((old) => {
-      const updated = old.passengers.map((person) => person.id === personId ? { ...person, age: valid && raw ? Number(raw) : undefined } : person)
+      const updated = updatePassengerAge(old.passengers, personId, raw).passengers
       return { ...old, passengers: chosen ? applySeniorBerthDefaults(updated, chosen, old.classSelections) : updated }
     })
   }
@@ -235,6 +236,12 @@ function App() {
   }
   function setDisability(personId: string, selected: boolean) {
     setData((old) => ({ ...old, passengers: setPassengerDisabilityAssistance(old.passengers, personId, selected) }))
+  }
+  function setSenior(personId: string, selected: boolean) {
+    setData((old) => ({ ...old, passengers: setPassengerSeniorCitizen(old.passengers, personId, selected) }))
+  }
+  function setCarHelp(personId: string, choice: CarHelpPreference) {
+    setData((old) => ({ ...old, passengers: recordCarHelpPreference(old.passengers, personId, choice) }))
   }
   function setBerthPreference(personId: string, legKey: string, preference: string) {
     setData((old) => ({ ...old, passengers: setPassengerBerthPreference(old.passengers, personId, legKey, preference) }))
@@ -298,7 +305,7 @@ function App() {
 
   else if (page==='classes') view=<section className="page-stack"><Title title={t('classTitle')} description={t('classHelp')} back={()=>navigate('review')} backLabel={t('backReview')}/><JourneyGuide step="train" language={data.language}/>{!chosen?<Empty title={t('noRoute')} message={t('chooseRoute')} action={()=>navigate('results')} actionLabel={t('openResults')}/>:<section className="panel"><h2>{chosen.legs[0]!.from.name} → {chosen.legs.at(-1)!.to.name}</h2><p className="synthetic-notice">{t('classNotice')}</p>{chosen.legs.map((leg,index)=>{const key=journeyLegSelectionKey(chosen.id,index,leg.service.id);const choice=data.classSelections[key];const opts=supportedClassesForLeg(chosen,index);const cls=opts.find((item)=>item.code===choice?.classCode);return <section className="class-leg" key={key}><h3>{leg.service.id} · Leg {index+1}</h3><p>{leg.from.name} {clock(leg.departAt)} → {leg.to.name} {clock(leg.arriveAt)}</p><div className="class-grid">{opts.map((option)=><label className={'class-choice '+(choice?.classCode===option.code?'chosen':'')} key={option.code}><input type="radio" name={'class-'+key} checked={choice?.classCode===option.code} onChange={()=>setClass(chosen,index,option.code)}/><b>{option.code} · {option.name}</b><span>{t('demoStatus')}: {option.demoAvailability}</span><small>{option.description}</small><strong>{money(option.farePaisePerPassenger)} {t('perPerson')}</strong><small>{t('group')}: {money(option.farePaisePerPassenger*data.passengers.length)}</small></label>)}</div>{cls&&<label className="field berth-field"><span>SEAT / BERTH PREFERENCE</span><select value={choice?.preferenceCode??'none'} onChange={(event)=>setPreference(chosen,index,event.target.value)}>{cls.seatPreferences.map((item)=><option key={item.code} value={item.code}>{item.label}</option>)}</select></label>}</section>})}{classError&&<p className="notice-error" role="alert">{classError}</p>}<div className="fare-total"><span>{t('estimatedTotal')} · {data.passengers.length} {t('passengerCountLabel')}</span><b>{fare?money(fare.totalFarePaise):'Choose a class per leg'}</b></div><div className="button-row"><button className="button-primary" disabled={!classCheck.valid} onClick={continuePassenger}>{t('classContinue')}</button><button className="button-secondary" onClick={()=>navigate('review')}>Back to review</button></div></section>}</section>
 
-  else if (page==='passengerDetails') view=<section className="page-stack"><Title title={t('passengerDetails')} description={t('passengerDetailsHelp')} back={()=>navigate('classes')} backLabel={t('backClasses')}/><JourneyGuide step="passengers" language={data.language}/>{!chosen||!fare?<Empty title={t('completeSelection')} message={t('classRequired')} action={()=>navigate('classes')} actionLabel={t('returnClasses')}/>:<Suspense fallback={null}><PassengerDetailsPanel passengers={data.passengers} selectedIds={data.bookingPassengerIds} route={chosen} classSelections={data.classSelections} fare={fare.totalFarePaise} date={data.searchRequest?.date??''} ageInputs={ageInputs} ageErrors={ageErrors} t={t} money={money} togglePassenger={togglePassenger} setClass={setClass} setAge={setPassengerAge} setMeal={setMeal} setDisability={setDisability} setBerth={setBerthPreference} continuePayment={continuePayment} back={()=>navigate('classes')} message={paymentMessage}/></Suspense>}</section>
+  else if (page==='passengerDetails') view=<section className="page-stack"><Title title={t('passengerDetails')} description={t('passengerDetailsHelp')} back={()=>navigate('classes')} backLabel={t('backClasses')}/><JourneyGuide step="passengers" language={data.language}/>{!chosen||!fare?<Empty title={t('completeSelection')} message={t('classRequired')} action={()=>navigate('classes')} actionLabel={t('returnClasses')}/>:<Suspense fallback={null}><PassengerDetailsPanel passengers={data.passengers} selectedIds={data.bookingPassengerIds} route={chosen} classSelections={data.classSelections} fare={fare.totalFarePaise} date={data.searchRequest?.date??''} ageInputs={ageInputs} ageErrors={ageErrors} t={t} money={money} togglePassenger={togglePassenger} setClass={setClass} setAge={setPassengerAge} setMeal={setMeal} setDisability={setDisability} setBerth={setBerthPreference} setSeniorCitizen={setSenior} setCarHelp={setCarHelp} continuePayment={continuePayment} back={()=>navigate('classes')} message={paymentMessage}/></Suspense>}</section>
 
   else if (page==='payment') view=<section className="page-stack"><Title title={t('payment')} description={t('paymentHelp')} back={()=>navigate('passengerDetails')} backLabel={t('backClasses')}/><JourneyGuide step="payment" language={data.language}/>{!chosen||!fare?<Empty title={t('noSummary')} message={t('summaryHelp')} action={()=>navigate('passengerDetails')} actionLabel={t('reviewPassengers')}/>:<div className="checkout-layout"><section className="panel"><span className="eyebrow">{t('paymentMethods')}</span><h2>{t('methodOutcome')}</h2><p>{t('noSensitive')}</p><fieldset className="payment-options"><legend>{t('method')}</legend>{([['demo-upi','Demo UPI'],['demo-card','Demo Card'],['demo-netbanking','Demo Net Banking']] as const).map(([method,label])=><label key={method}><input type="radio" name="payment-method" checked={data.paymentMethod===method} onChange={()=>set('paymentMethod',method)}/>{label}</label>)}</fieldset><fieldset className="payment-options"><legend>{t('controlledResult')}</legend><label><input type="radio" name="payment-outcome" checked={data.paymentStatus!=='failed-demo'} onChange={()=>set('paymentStatus',null)}/>{t('simulateSuccess')}</label><label><input type="radio" name="payment-outcome" checked={data.paymentStatus==='failed-demo'} onChange={()=>set('paymentStatus','failed-demo')}/>{t('simulateFailure')}</label></fieldset>{paymentMessage&&<p className={data.paymentStatus==='failed-demo'?'notice-error':'notice-success'} role="status">{paymentMessage}</p>}<div className="button-row"><button ref={paymentConfirmRef} className="button-primary" onClick={()=>pay(data.paymentStatus==='failed-demo'?'failure':'success')}>{t('confirm')}</button><button className="button-danger" onClick={()=>pay('failure')}>{t('failed')}</button></div></section><BookingSummary route={chosen} fare={fare.totalFarePaise} passengers={checkoutPassengers} selections={data.classSelections} t={t}/></div>}{assistancePromptPassengerId&&assistancePassenger&&<div className="assistance-modal-backdrop"><section className="assistance-modal" role="dialog" aria-modal="true" aria-labelledby="car-help-heading" aria-describedby="car-help-description" data-assistance-dialog><button type="button" className="assistance-modal-close" aria-label={t('dismissDialog')} onClick={closeAssistancePrompt}>×</button><span className="eyebrow">{t('disabilityLabel')}</span><h2 id="car-help-heading">{t('carHelpFor')} {assistancePassenger.name}</h2><p id="car-help-description" className="assistance-question">{t('carHelpQuestion')}</p><p className="assistance-demo-note">{t('carHelpDemo')}</p><div className="button-row"><button ref={assistanceYesRef} type="button" className="button-primary" onClick={()=>answerAssistancePrompt('yes')}>{t('carHelpYes')}</button><button type="button" className="button-secondary" onClick={()=>answerAssistancePrompt('no')}>{t('carHelpNo')}</button><button type="button" className="button-secondary" onClick={closeAssistancePrompt}>{t('dismissDialog')}</button></div></section></div>}</section>
 

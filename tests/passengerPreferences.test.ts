@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { planJourney } from '../src/engine/planJourney.ts'
-import { applySeniorBerthDefaults, pendingCarHelpPassenger, qualifiesForSeniorBerthDefault, recordCarHelpPreference, seniorBerthDefault, setPassengerBerthPreference, setPassengerDisabilityAssistance, setPassengerMealPreference } from '../src/engine/passengerPreferences.ts'
+import { applySeniorBerthDefaults, haveCarHelpAnswers, pendingCarHelpPassenger, qualifiesForSeniorBerthDefault, recordCarHelpPreference, seniorBerthDefault, setPassengerBerthPreference, setPassengerDisabilityAssistance, setPassengerMealPreference, setPassengerSeniorCitizen, updatePassengerAge } from '../src/engine/passengerPreferences.ts'
 import { journeyLegSelectionKey, supportedClassesForLeg } from '../src/engine/trainSelection.ts'
 import type { JourneyClassSelectionState, JourneyOption, MealPreference, Passenger } from '../src/types/journey.ts'
 
@@ -27,6 +27,32 @@ test('senior default uses the explicit 60+ demo threshold and rejects missing or
   assert.equal(seniorBerthDefault(59, ['lower']), null)
   assert.equal(seniorBerthDefault(60, ['lower']), 'lower')
   assert.equal(seniorBerthDefault(61, ['upper']), null)
+})
+
+test('age entry automatically sets the visible senior-citizen status at 60 and clears it below 60', () => {
+  const people = [person('traveller', 59), person('other', 44)]
+  const atThreshold = updatePassengerAge(people, 'traveller', '60')
+  assert.equal(atThreshold.valid, true)
+  assert.equal(atThreshold.passengers[0]?.seniorCitizen, true)
+  assert.equal(atThreshold.passengers[0]?.age, 60)
+  assert.equal(atThreshold.passengers[1], people[1])
+  const belowThreshold = updatePassengerAge(atThreshold.passengers, 'traveller', '59')
+  assert.equal(belowThreshold.passengers[0]?.seniorCitizen, false)
+  const invalid = updatePassengerAge(belowThreshold.passengers, 'traveller', '121')
+  assert.equal(invalid.valid, false)
+  assert.equal(invalid.passengers[0]?.seniorCitizen, false)
+})
+
+test('senior status can be changed and the per-leg lower berth remains a user-editable preference', () => {
+  const route = routeWithBerths()
+  const selections = selectionsFor(route, '3A')
+  const senior = setPassengerSeniorCitizen([person('senior', 60)], 'senior', true)
+  const auto = applySeniorBerthDefaults(senior, route, selections)
+  const legIndex = route.legs.findIndex((_, index) => supportedClassesForLeg(route, index).some((option) => option.code === '3A' && option.seatPreferences.some((preference) => preference.code === 'lower')))
+  const key = journeyLegSelectionKey(route.id, legIndex, route.legs[legIndex]!.service.id)
+  assert.equal(auto[0]?.berthPreferences?.[key], 'lower')
+  const changed = setPassengerBerthPreference(auto, 'senior', key, 'upper')
+  assert.equal(changed[0]?.berthPreferences?.[key], 'upper')
 })
 
 test('ages 60 and 61 get one automatic lower berth per supported leg while age 59 does not', () => {
@@ -71,11 +97,13 @@ test('disability response is required only for selected passengers and remains p
   const base = [person('one'),person('two')]
   const selected = setPassengerDisabilityAssistance(base,'one',true)
   assert.equal(pendingCarHelpPassenger(selected)?.id,'one')
+  assert.equal(haveCarHelpAnswers(selected), false)
   // Dismissing the view without recording an explicit answer leaves consent pending.
   assert.equal(pendingCarHelpPassenger(selected)?.carHelpPreference,undefined)
   assert.equal(pendingCarHelpPassenger(setPassengerDisabilityAssistance(base,'one',false)),undefined)
   const answered = recordCarHelpPreference(selected,'one','yes')
   assert.equal(pendingCarHelpPassenger(answered),undefined)
+  assert.equal(haveCarHelpAnswers(answered), true)
   assert.equal(answered[0]?.carHelpPreference,'yes')
   assert.equal(answered[1]?.passengerWithDisabilities,undefined)
   const declined = recordCarHelpPreference(selected,'one','no')

@@ -21,7 +21,7 @@ export function buildDemoTicketText(booking: DemoBooking, language: Language): s
     const assistance = passenger.passengerWithDisabilities
       ? passenger.carHelpPreference === 'yes' ? t('carHelpYes') : passenger.carHelpPreference === 'no' ? t('carHelpNo') : t('carHelpPending')
       : t('carHelpNo')
-    return `${passenger.name} — ${t('ageLabel')}: ${passenger.age ?? '—'}; ${t('mealPreferenceLabel')}: ${t(mealPreferenceLabelKey(passenger.mealPreference ?? 'no-meal'))}; ${t('disabilityLabel')}: ${passenger.passengerWithDisabilities ? t('carHelpYes') : t('carHelpNo')}; ${t('carHelpFor')}: ${assistance}`
+    return `${passenger.name} — ${t('ageLabel')}: ${passenger.age ?? '—'}; ${t('seniorCitizen')}: ${passenger.seniorCitizen ? t('yes') : t('no')}; ${t('mealPreferenceLabel')}: ${t(mealPreferenceLabelKey(passenger.mealPreference ?? 'no-meal'))}; ${t('disabilityLabel')}: ${passenger.passengerWithDisabilities ? t('carHelpYes') : t('carHelpNo')}; ${t('carHelpFor')}: ${assistance}`
   }).join('\n')
   return [
     t('confirmationText'), t('noTicketDisclaimer'),

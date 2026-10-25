@@ -6,6 +6,22 @@ export function qualifiesForSeniorBerthDefault(age: unknown): age is number {
   return typeof age === 'number' && Number.isInteger(age) && age >= 60 && age <= 120
 }
 
+/** Age entry automatically sets the stored senior-citizen status at the demo's 60+ threshold. */
+export function updatePassengerAge(passengers: Passenger[], passengerId: string, raw: string): { passengers: Passenger[]; valid: boolean } {
+  const valid = raw === '' || (/^\d+$/.test(raw) && Number(raw) >= 1 && Number(raw) <= 120)
+  const age = valid && raw ? Number(raw) : undefined
+  return {
+    valid,
+    passengers: passengers.map((passenger) => passenger.id === passengerId
+      ? { ...passenger, age, seniorCitizen: qualifiesForSeniorBerthDefault(age) }
+      : passenger),
+  }
+}
+
+export function setPassengerSeniorCitizen(passengers: Passenger[], passengerId: string, selected: boolean): Passenger[] {
+  return passengers.map((passenger) => passenger.id === passengerId ? { ...passenger, seniorCitizen: selected } : passenger)
+}
+
 export function seniorBerthDefault(age: unknown, supportedPreferenceCodes: readonly string[]): 'lower' | null {
   return qualifiesForSeniorBerthDefault(age) && supportedPreferenceCodes.includes('lower') ? 'lower' : null
 }
@@ -64,6 +80,10 @@ export function setPassengerDisabilityAssistance(passengers: Passenger[], passen
 
 export function pendingCarHelpPassenger(passengers: Passenger[]): Passenger | undefined {
   return passengers.find((passenger) => passenger.passengerWithDisabilities && passenger.carHelpPreference === undefined)
+}
+
+export function haveCarHelpAnswers(passengers: Passenger[]): boolean {
+  return !pendingCarHelpPassenger(passengers)
 }
 
 /** Returns an updated copy and leaves every other passenger record untouched. */

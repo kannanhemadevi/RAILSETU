@@ -16,6 +16,7 @@ export type Passenger = {
   name: string
   category: 'Adult' | 'Senior' | 'Child' | 'Accessible'
   age?: number
+  seniorCitizen?: boolean
   mealPreference?: MealPreference
   passengerWithDisabilities?: boolean
   carHelpPreference?: CarHelpPreference
